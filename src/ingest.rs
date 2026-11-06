@@ -106,6 +106,23 @@ pub fn split(text: &str, size: usize, overlap: usize) -> Vec<String> {
     chunks
 }
 
+/// markdown sections: a heading line starts a chunk; the heading text stays in the chunk (it carries the keywords).
+/// Sections longer than 2 x size are split into size windows so one giant section does not swallow the ranking.
+pub fn split_by_heading(text: &str, size: usize, overlap: usize) -> Vec<String> {
+    let mut sections: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') && !cur.trim().is_empty() { sections.push(std::mem::take(&mut cur)); }
+        cur.push_str(line); cur.push('\n');
+    }
+    if !cur.trim().is_empty() { sections.push(cur); }
+    let mut out = Vec::new();
+    for sec in sections {
+        if sec.chars().count() > 2 * size { out.extend(split(&sec, size, overlap)); } else { out.push(sec.trim().to_string()); }
+    }
+    out
+}
+
 pub fn list_files(cfg: &Config) -> Result<Vec<PathBuf>> {
     let mut out: HashSet<PathBuf> = HashSet::new();
     for pat in &cfg.include {
@@ -144,7 +161,8 @@ pub fn build_chunks(cfg: &Config) -> Result<(Vec<PathBuf>, Vec<Chunk>)> {
         let mut n = 0usize;
         let mut seen: HashSet<String> = HashSet::new();
         for (page, body) in pages {
-            for t in split(&body, cfg.chunk.size, cfg.chunk.overlap) {
+            let pieces = if cfg.chunk.by == "heading" && page.is_none() { split_by_heading(&body, cfg.chunk.size, cfg.chunk.overlap) } else { split(&body, cfg.chunk.size, cfg.chunk.overlap) };
+            for t in pieces {
                 let key = norm(&t);
                 if !seen.insert(key) { continue; }
                 chunks.push(Chunk { id: format!("{doc}#{n}"), doc: doc.clone(), page, sha: sha(&t), text: t });

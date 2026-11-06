@@ -12,6 +12,9 @@ pub struct Chunk {
     pub overlap: usize,
     #[serde(default = "d_true")]
     pub clean: bool,
+    /// size: fixed windows of `size` chars. heading: one chunk per markdown heading section (split further only when a section exceeds 2 x size)
+    #[serde(default = "d_by")]
+    pub by: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
@@ -71,6 +74,7 @@ pub struct Config {
 fn d_size() -> usize { 500 }
 fn d_overlap() -> usize { 60 }
 fn d_true() -> bool { true }
+fn d_by() -> String { "size".into() }
 fn d_ollama() -> String { "ollama".into() }
 fn d_host() -> String { "http://localhost:11434".into() }
 fn d_device() -> String { "cpu".into() }
@@ -81,7 +85,7 @@ fn d_recall() -> f64 { 0.9 }
 fn d_drop() -> f64 { 0.02 }
 fn d_docs() -> String { "./docs".into() }
 fn d_include() -> Vec<String> { vec!["**/*.md".into(), "**/*.txt".into(), "**/*.pdf".into()] }
-fn d_chunk() -> Chunk { Chunk { size: 500, overlap: 60, clean: true } }
+fn d_chunk() -> Chunk { Chunk { size: 500, overlap: 60, clean: true, by: d_by() } }
 fn d_embed() -> Model { Model { provider: "fastembed".into(), model: "bge-m3".into(), host: d_host(), device: d_device() } }
 fn d_llm() -> Model { Model { provider: d_ollama(), model: "qwen3:8b".into(), host: d_host(), device: d_device() } }
 fn d_search() -> Search { Search { mode: d_mode(), k: 5, pool: 30 } }
@@ -107,7 +111,7 @@ impl Config {
             "# searchlint: retrieval lint config. Commit this file, golden.yaml and searchlint.baseline.json; ignore .searchlint/\n\
 docs: {docs}\n\
 include: [\"**/*.md\", \"**/*.txt\", \"**/*.pdf\"]\n\
-chunk: {{size: 500, overlap: 60, clean: true}}\n\
+chunk: {{size: 500, overlap: 60, clean: true, by: size}}   # by: heading = one chunk per markdown section\n\
 embed: {{provider: fastembed, model: bge-m3}}   # in-process ONNX; or provider: ollama with host\n\
 llm: {{provider: ollama, model: qwen3:8b, host: http://localhost:11434}}\n\
 search: {{mode: hybrid, k: 5, pool: 30}}\n\
@@ -121,6 +125,7 @@ state: .searchlint\n"
         if !(50..=5000).contains(&self.chunk.size) { bail!("chunk.size must be 50..5000"); }
         if self.chunk.overlap * 2 >= self.chunk.size { bail!("chunk.overlap must be < chunk.size / 2"); }
         if !["bm25", "dense", "hybrid"].contains(&self.search.mode.as_str()) { bail!("search.mode must be bm25 | dense | hybrid"); }
+        if !["size", "heading"].contains(&self.chunk.by.as_str()) { bail!("chunk.by must be size | heading"); }
         if !(1..=100).contains(&self.search.k) { bail!("search.k must be 1..100"); }
         Ok(())
     }
@@ -133,7 +138,7 @@ state: .searchlint\n"
     /// what the index and the baseline depend on: chunking, embedding model, search settings
     pub fn fingerprint(&self) -> String {
         let key = serde_json::json!({
-            "chunk": {"size": self.chunk.size, "overlap": self.chunk.overlap, "clean": self.chunk.clean},
+            "chunk": {"size": self.chunk.size, "overlap": self.chunk.overlap, "clean": self.chunk.clean, "by": self.chunk.by},
             "embed": if self.needs_embeddings() { Some(format!("{}:{}", self.embed.provider, self.embed.model)) } else { None },
             "search": {"mode": self.search.mode, "k": self.search.k, "pool": self.search.pool},
         });
