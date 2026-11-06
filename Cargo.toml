@@ -24,7 +24,7 @@ walkdir = "2"
 tantivy = "0.24"
 lindera = { version = "6", default-features = false, features = ["embed-ipadic"] }
 reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
-pdf-extract = "0.9"
+pdf-extract = "0.12"
 chrono = "0.4"
 bytemuck = "1"
 

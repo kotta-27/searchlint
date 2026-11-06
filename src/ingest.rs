@@ -28,12 +28,31 @@ pub fn norm(s: &str) -> String { WS.replace_all(s, "").to_string() }
 /// -> [(page, text)]; page is None for plain text files
 pub fn extract(path: &Path) -> Result<Vec<(Option<u32>, String)>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ext == "pdf" {
-        let bytes = std::fs::read(path)?;
-        let pages = pdf_extract::extract_text_from_mem_by_pages(&bytes).with_context(|| format!("pdf {}", path.display()))?;
-        return Ok(pages.into_iter().enumerate().map(|(i, t)| (Some(i as u32 + 1), t)).collect());
-    }
+    if ext == "pdf" { return extract_pdf(path); }
     Ok(vec![(None, std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?)])
+}
+
+/// pdf-extract first (pure Rust); it panics on some real-world PDFs, so that is caught and `pdftotext` (poppler)
+/// is used when available. Pages come back 1-based.
+fn extract_pdf(path: &Path) -> Result<Vec<(Option<u32>, String)>> {
+    let bytes = std::fs::read(path)?;
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem_by_pages(&bytes));
+    std::panic::set_hook(prev);
+    match r {
+        Ok(Ok(pages)) if pages.iter().any(|p| !p.trim().is_empty()) => return Ok(pages.into_iter().enumerate().map(|(i, t)| (Some(i as u32 + 1), t)).collect()),
+        _ => {}
+    }
+    // fallback: pdftotext writes pages separated by form feeds
+    let out = std::process::Command::new("pdftotext").arg("-layout").arg(path).arg("-").output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let text = String::from_utf8_lossy(&o.stdout).to_string();
+            Ok(text.split('\u{c}').enumerate().map(|(i, t)| (Some(i as u32 + 1), t.to_string())).filter(|(_, t)| !t.trim().is_empty()).collect())
+        }
+        _ => { eprintln!("warning: could not extract text from {} (pdf-extract failed and pdftotext is not available): skipped", path.display()); Ok(vec![]) }
+    }
 }
 
 pub fn clean_pages(pages: Vec<(Option<u32>, String)>) -> Vec<(Option<u32>, String)> {
