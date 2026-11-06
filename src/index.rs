@@ -3,7 +3,7 @@
 //! index.json records the config fingerprint and the documents manifest so `run` can tell when the index is stale.
 use crate::config::Config;
 use crate::ingest::{docs_manifest, Chunk};
-use crate::ollama::Ollama;
+use crate::embed::Embedder;
 use crate::tokenize;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct Index {
     f_toks: Field,
     f_row: Field,
     dense: Option<Vec<f32>>, // row-major chunks x dims
-    ollama: Option<Ollama>,
+    embedder: Option<Embedder>,
 }
 
 fn paths(cfg: &Config) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
@@ -65,7 +65,8 @@ impl Index {
             let bytes = fs::read(&dense_p)?;
             dense = Some(bytemuck::cast_slice::<u8, f32>(&bytes).to_vec());
         }
-        Ok(Index { cfg: cfg.clone(), chunks, meta, tindex, f_toks, f_row, dense, ollama: cfg.needs_embeddings().then(|| Ollama::new(&cfg.embed.host)) })
+        let embedder = if cfg.needs_embeddings() { Some(Embedder::new(cfg)?) } else { None };
+        Ok(Index { cfg: cfg.clone(), chunks, meta, tindex, f_toks, f_row, dense, embedder })
     }
 
     /// None when fresh, else a reason
@@ -94,12 +95,12 @@ impl Index {
         let mut dims = 0usize;
         let mut dense = None;
         if cfg.needs_embeddings() {
-            let model = cfg.embed.model.clone();
-            let ollama = Ollama::new(&cfg.embed.host);
+            let model = format!("{}:{}", cfg.embed.provider, cfg.embed.model);
+            let embedder = Embedder::new(cfg)?;
             let mut cache = Cache::load(&cache_p, &model)?;
             let need: Vec<&Chunk> = chunks.iter().filter(|c| !cache.has(&c.sha)).collect();
             for (i, batch) in need.chunks(64).enumerate() {
-                let vecs = ollama.embed(&model, &batch.iter().map(|c| c.text.clone()).collect::<Vec<_>>())?;
+                let vecs = embedder.embed(&batch.iter().map(|c| c.text.clone()).collect::<Vec<_>>())?;
                 for (c, v) in batch.iter().zip(vecs) { cache.put(&c.sha, v); }
                 progress(((i + 1) * 64).min(need.len()), need.len());
             }
@@ -119,7 +120,8 @@ impl Index {
             model: cfg.needs_embeddings().then(|| cfg.embed.model.clone()), fingerprint: cfg.fingerprint(), docs: docs_hash, dims,
         };
         fs::write(&meta_p, serde_json::to_string_pretty(&meta)?)?;
-        Ok(Index { cfg: cfg.clone(), chunks, meta, tindex, f_toks, f_row, dense, ollama: cfg.needs_embeddings().then(|| Ollama::new(&cfg.embed.host)) })
+        let embedder = if cfg.needs_embeddings() { Some(Embedder::new(cfg)?) } else { None };
+        Ok(Index { cfg: cfg.clone(), chunks, meta, tindex, f_toks, f_row, dense, embedder })
     }
 
     pub fn bm25(&self, q: &str, n: usize) -> Result<Vec<usize>> {
@@ -140,8 +142,8 @@ impl Index {
     }
 
     pub fn dense_rank(&self, q: &str, n: usize) -> Result<Vec<usize>> {
-        let (Some(mat), Some(ollama)) = (&self.dense, &self.ollama) else { bail!("dense search needs embeddings") };
-        let qv = ollama.embed(&self.cfg.embed.model, &[q.to_string()])?.remove(0);
+        let (Some(mat), Some(embedder)) = (&self.dense, &self.embedder) else { bail!("dense search needs embeddings") };
+        let qv = embedder.embed(&[q.to_string()])?.remove(0);
         let d = self.meta.dims;
         let mut scores: Vec<(f32, usize)> = (0..self.chunks.len()).map(|i| (mat[i * d..(i + 1) * d].iter().zip(&qv).map(|(a, b)| a * b).sum::<f32>(), i)).collect();
         scores.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(&b.1)));

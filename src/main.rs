@@ -1,6 +1,7 @@
 //! searchlint: lint for retrieval.
 //! exit codes: 0 ok, 1 gate failed, 2 cannot evaluate (stale index, bad config, Ollama down)
 mod config;
+mod embed;
 mod golden;
 mod index;
 mod ingest;

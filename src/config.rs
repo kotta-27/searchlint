@@ -130,7 +130,7 @@ state: .searchlint\n"
     pub fn fingerprint(&self) -> String {
         let key = serde_json::json!({
             "chunk": {"size": self.chunk.size, "overlap": self.chunk.overlap, "clean": self.chunk.clean},
-            "embed": if self.needs_embeddings() { Some(&self.embed.model) } else { None },
+            "embed": if self.needs_embeddings() { Some(format!("{}:{}", self.embed.provider, self.embed.model)) } else { None },
             "search": {"mode": self.search.mode, "k": self.search.k, "pool": self.search.pool},
         });
         hex::encode(Sha256::digest(key.to_string().as_bytes()))[..10].to_string()

@@ -27,7 +27,15 @@ reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], def
 pdf-extract = "0.12"
 chrono = "0.4"
 bytemuck = "1"
+fastembed = { version = "7.6", optional = true, default-features = false, features = ["onnx", "ort-download-binaries-native-tls", "hf-hub-native-tls"] }
+
+[features]
+default = ["local-embed"]
+# BGE-M3 in-process via ONNX Runtime (downloads ort binaries at build time and the model on first use).
+# `cargo install --no-default-features` builds a slimmer binary that needs Ollama for dense search.
+local-embed = ["dep:fastembed"]
 
 [profile.release]
 opt-level = 3
 lto = true
+
