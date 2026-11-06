@@ -60,8 +60,7 @@ impl Index {
         let tindex = TIndex::open_in_dir(&tant_p).context("open tantivy index")?;
         let _ = sch;
         let mut dense = None;
-        if cfg.needs_embeddings() {
-            if !dense_p.exists() { bail!("index was built without embeddings (bm25): run `searchlint index`"); }
+        if cfg.needs_embeddings() && dense_p.exists() {
             let bytes = fs::read(&dense_p)?;
             dense = Some(bytemuck::cast_slice::<u8, f32>(&bytes).to_vec());
         }
@@ -71,6 +70,7 @@ impl Index {
 
     /// None when fresh, else a reason
     pub fn staleness(&self) -> Result<Option<String>> {
+        if self.cfg.needs_embeddings() && self.dense.is_none() { return Ok(Some("index was built without embeddings (bm25)".into())); }
         if self.meta.fingerprint != self.cfg.fingerprint() { return Ok(Some("config changed since the index was built".into())); }
         if self.meta.docs != docs_manifest(&self.cfg)?.0 { return Ok(Some("documents changed since the index was built".into())); }
         Ok(None)
@@ -142,7 +142,7 @@ impl Index {
     }
 
     pub fn dense_rank(&self, q: &str, n: usize) -> Result<Vec<usize>> {
-        let (Some(mat), Some(embedder)) = (&self.dense, &self.embedder) else { bail!("dense search needs embeddings") };
+        let (Some(mat), Some(embedder)) = (&self.dense, &self.embedder) else { bail!("index was built without embeddings: run `searchlint index`") };
         let qv = embedder.embed(&[q.to_string()])?.remove(0);
         let d = self.meta.dims;
         let mut scores: Vec<(f32, usize)> = (0..self.chunks.len()).map(|i| (mat[i * d..(i + 1) * d].iter().zip(&qv).map(|(a, b)| a * b).sum::<f32>(), i)).collect();
