@@ -102,10 +102,6 @@ Every tool returns structured content.
 - `recent_queries(limit)`: distinct recent queries with hit counts: golden candidates.
 - `reload()`: pick up a new index without restarting.
 
-## Layout
-
-`src/` is the Rust implementation (the one that ships). `py/` is the original Python prototype, kept for reference.
-
 ## Metrics
 
 - recall@k: a golden query hits if any of the top k chunks contains an expected snippet
