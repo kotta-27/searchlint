@@ -1,5 +1,7 @@
 # searchlint
 
+日本語: [README.ja.md](README.ja.md)
+
 Lint for retrieval. Golden queries live in your repo; `searchlint run --ci` fails the build when
 recall drops after a document edit, a chunking change or an embedding-model swap. The same index is
 served to agents over MCP, together with its measured quality.
