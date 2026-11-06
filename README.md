@@ -4,13 +4,14 @@ Lint for retrieval. Golden queries live in your repo; `searchlint run --ci` fail
 recall drops after a document edit, a chunking change or an embedding-model swap. The same index is
 served to agents over MCP, together with its measured quality.
 
-Single Rust binary. Japanese segmentation (lindera, IPADIC embedded) and BM25 (tantivy) run in-process; only the
-embeddings and golden drafting go through Ollama. Nothing leaves the machine.
-`search.mode: bm25` needs no embeddings and no Ollama at all (CI on a plain runner).
+Single Rust binary. Japanese segmentation (lindera, IPADIC embedded), BM25 (tantivy) and the BGE-M3 embeddings
+(ONNX, `embed.provider: fastembed`) all run in-process. Nothing leaves the machine. Ollama is only needed for
+`golden draft` (an LLM writes the first queries) or if you prefer `embed.provider: ollama`.
+`search.mode: bm25` needs no embeddings at all.
 
 ```
 cargo install --git https://github.com/kotta-27/searchlint   # or: cargo build --release
-ollama pull bge-m3 && ollama pull qwen3:8b                     # hybrid / dense mode and golden drafting
+ollama pull qwen3:8b                                           # only for `golden draft`
 
 searchlint init --docs ./docs        # writes searchlint.yaml
 searchlint index                     # txt / md / pdf -> cleaned chunks -> FTS5 (+ FAISS unless bm25)
@@ -55,7 +56,7 @@ shows the top-1 chunk: that is a golden update, not a retrieval regression. Edit
 docs: ./docs
 include: ["**/*.md", "**/*.txt", "**/*.pdf"]
 chunk: {size: 500, overlap: 60, clean: true}   # clean: drop running headers, page numbers, TOC lines
-embed: {provider: ollama, model: bge-m3}        # unused when search.mode is bm25
+embed: {provider: fastembed, model: bge-m3}     # fastembed = in-process ONNX (model cached in ~/.cache/searchlint); or provider: ollama
 llm:   {provider: ollama, model: qwen3:8b}      # only for golden drafting
 search: {mode: hybrid, k: 5, pool: 30}          # bm25 | dense | hybrid (RRF)
 gate:  {recall: 0.9, mrr: 0.0, max_drop: 0.02}
@@ -77,8 +78,8 @@ comfortable at 100. Grow it from `recent_queries` (what agents actually ask) and
 - run: pip install searchlint && searchlint index && searchlint run --ci
 ```
 
-Hybrid or dense mode needs Ollama on the runner (self-hosted). Keep `.searchlint/embed-cache.npz` in
-the runner cache: re-indexing then embeds only new or changed chunks. bm25 mode runs anywhere.
+Hybrid or dense mode with `provider: fastembed` runs on any runner (CPU, no server); the model (~600 MB) and
+`.searchlint/embed-cache/` are worth caching between runs so re-indexing only embeds new or changed chunks.
 
 `searchlint run --json` prints the summary, problems, notes and missed queries as JSON.
 
