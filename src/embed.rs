@@ -17,12 +17,13 @@ impl Embedder {
             "fastembed" => {
                 #[cfg(feature = "local-embed")]
                 {
-                    use fastembed::{Bgem3Embedding, Bgem3InitOptions, Bgem3Model};
+                    use fastembed::{AutoDevicePolicy, Bgem3Embedding, Bgem3InitOptions, Bgem3Model};
                     let name = cfg.embed.model.to_ascii_lowercase().replace('_', "-");
                     if !matches!(name.as_str(), "bge-m3" | "bgem3" | "bge-m3-q" | "bgem3q") { bail!("fastembed provider supports model bge-m3 (got {})", cfg.embed.model); }
                     let cache = dirs_cache().join("models");
                     std::fs::create_dir_all(&cache)?;
-                    let m = Bgem3Embedding::try_new(Bgem3InitOptions::new(Bgem3Model::BGEM3Q).with_cache_dir(cache).with_show_download_progress(true))
+                    let policy = match cfg.embed.device.as_str() { "cpu" => AutoDevicePolicy::PreferCPU, _ => AutoDevicePolicy::PreferGPU };
+                    let m = Bgem3Embedding::try_new(Bgem3InitOptions::new(Bgem3Model::BGEM3Q).with_cache_dir(cache).with_show_download_progress(true).with_auto_device(policy))
                         .context("load BGE-M3 (fastembed)")?;
                     return Ok(Embedder::Fast(std::cell::RefCell::new(m)));
                 }

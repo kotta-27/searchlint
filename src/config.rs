@@ -20,6 +20,9 @@ pub struct Model {
     pub model: String,
     #[serde(default = "d_host")]
     pub host: String,
+    /// fastembed only: cpu | gpu (CoreML / CUDA / DirectML when the runtime finds one; falls back to cpu)
+    #[serde(default = "d_device")]
+    pub device: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Search {
@@ -70,6 +73,7 @@ fn d_overlap() -> usize { 60 }
 fn d_true() -> bool { true }
 fn d_ollama() -> String { "ollama".into() }
 fn d_host() -> String { "http://localhost:11434".into() }
+fn d_device() -> String { "cpu".into() }
 fn d_mode() -> String { "hybrid".into() }
 fn d_k() -> usize { 5 }
 fn d_pool() -> usize { 30 }
@@ -78,8 +82,8 @@ fn d_drop() -> f64 { 0.02 }
 fn d_docs() -> String { "./docs".into() }
 fn d_include() -> Vec<String> { vec!["**/*.md".into(), "**/*.txt".into(), "**/*.pdf".into()] }
 fn d_chunk() -> Chunk { Chunk { size: 500, overlap: 60, clean: true } }
-fn d_embed() -> Model { Model { provider: d_ollama(), model: "bge-m3".into(), host: d_host() } }
-fn d_llm() -> Model { Model { provider: d_ollama(), model: "qwen3:8b".into(), host: d_host() } }
+fn d_embed() -> Model { Model { provider: "fastembed".into(), model: "bge-m3".into(), host: d_host(), device: d_device() } }
+fn d_llm() -> Model { Model { provider: d_ollama(), model: "qwen3:8b".into(), host: d_host(), device: d_device() } }
 fn d_search() -> Search { Search { mode: d_mode(), k: 5, pool: 30 } }
 fn d_gate() -> Gate { Gate { recall: 0.9, mrr: 0.0, max_drop: 0.02 } }
 fn d_golden() -> String { "golden.yaml".into() }
@@ -104,7 +108,7 @@ impl Config {
 docs: {docs}\n\
 include: [\"**/*.md\", \"**/*.txt\", \"**/*.pdf\"]\n\
 chunk: {{size: 500, overlap: 60, clean: true}}\n\
-embed: {{provider: ollama, model: bge-m3, host: http://localhost:11434}}\n\
+embed: {{provider: fastembed, model: bge-m3}}   # in-process ONNX; or provider: ollama with host\n\
 llm: {{provider: ollama, model: qwen3:8b, host: http://localhost:11434}}\n\
 search: {{mode: hybrid, k: 5, pool: 30}}\n\
 gate: {{recall: 0.9, mrr: 0.0, max_drop: 0.02}}\n\

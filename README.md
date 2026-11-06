@@ -56,7 +56,9 @@ shows the top-1 chunk: that is a golden update, not a retrieval regression. Edit
 docs: ./docs
 include: ["**/*.md", "**/*.txt", "**/*.pdf"]
 chunk: {size: 500, overlap: 60, clean: true}   # clean: drop running headers, page numbers, TOC lines
-embed: {provider: fastembed, model: bge-m3}     # fastembed = in-process ONNX (model cached in ~/.cache/searchlint); or provider: ollama
+embed: {provider: fastembed, model: bge-m3, device: cpu}   # in-process ONNX, model cached in ~/.cache/searchlint
+#      device: gpu tries CoreML / CUDA / DirectML; on Apple silicon CPU is 10x faster for BGE-M3, so cpu is the default
+#      provider: ollama (+ host) uses a running Ollama instead
 llm:   {provider: ollama, model: qwen3:8b}      # only for golden drafting
 search: {mode: hybrid, k: 5, pool: 30}          # bm25 | dense | hybrid (RRF)
 gate:  {recall: 0.9, mrr: 0.0, max_drop: 0.02}
