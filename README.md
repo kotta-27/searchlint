@@ -96,7 +96,7 @@ Hybrid or dense mode with `provider: fastembed` runs on any runner (CPU, no serv
 
 Every tool returns structured content.
 
-- `search(query, k=5, doc=None)`: ranked chunks with `id`, `doc`, `page`, `text`. The description tells the agent the mode (bm25: use the documents' words, not paraphrases).
+- `search(query, k=5, doc=None)`: ranked chunks with `id`, `doc`, `page`, `text`, plus `trust` (`ok`, `stale`, `recall`, `n_golden`, `measured_at`, `reason`) on every call, so an agent sees a stale or under-measured index even if it never calls `quality`. The description tells the agent the mode (bm25: use the documents' words, not paraphrases).
 - `quality()`: `ok` (fresh index and recall above the gate), `recall`, `mrr`, `n`, `at`, `stale`, `reason`. Call it first.
 - `list_documents()`: what is indexed, with chunk and page counts.
 - `recent_queries(limit)`: distinct recent queries with hit counts: golden candidates.

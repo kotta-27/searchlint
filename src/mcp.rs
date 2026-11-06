@@ -16,7 +16,9 @@ pub fn serve(cfg: Config) -> Result<()> {
         _ => "Keyword + semantic search fused by rank.",
     };
     let tools = json!([
-        {"name": "search", "description": format!("Search the project's documents ({mode}). {hint} Returns ranked chunks with document, page and chunk id."),
+        {"name": "search", "description": format!("Search the project's documents ({mode}). {hint} Returns ranked chunks with document, page and chunk id, plus `trust`: \
+how far to rely on these results. If trust.ok is false, say why (trust.reason) before answering from the hits; an empty or weak result \
+from a well-measured index (trust.ok, high recall) more likely means the documents do not cover the question."),
          "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500}, "k": {"type": "integer", "minimum": 1, "maximum": 20, "default": cfg.search.k},
                          "doc": {"type": "string", "description": "restrict to one document path as returned by list_documents"}}, "required": ["query"]}},
         {"name": "quality", "description": "Whether to trust search: ok (fresh index + measured recall above the gate), recall@k, MRR, n golden queries, when measured, and the reason if not ok.",
@@ -91,7 +93,10 @@ fn call(cfg: &Config, index: &mut Index, log_path: &std::path::Path, name: &str,
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
                 let _ = writeln!(f, "{}", json!({"at": chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(), "q": q, "n_hits": hits.len(), "top": hits.iter().take(3).map(|h| &h.id).collect::<Vec<_>>()}));
             }
-            Ok(json!({"query": q, "mode": cfg.search.mode, "k": k, "doc": doc,
+            let qd = quality(cfg, index)?;
+            let trust = json!({"ok": qd["ok"], "stale": qd["stale"], "recall": qd.get("recall").cloned().unwrap_or(Value::Null),
+                               "n_golden": qd.get("n").cloned().unwrap_or(Value::Null), "measured_at": qd.get("at").cloned().unwrap_or(Value::Null), "reason": qd["reason"]});
+            Ok(json!({"query": q, "mode": cfg.search.mode, "k": k, "doc": doc, "trust": trust,
                 "hits": hits.iter().enumerate().map(|(i, h)| json!({"rank": i + 1, "id": h.id, "doc": h.doc, "page": h.page, "text": h.text})).collect::<Vec<_>>()}))
         }
         "quality" => quality(cfg, index),

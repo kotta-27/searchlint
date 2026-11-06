@@ -95,7 +95,7 @@ gate:  {recall: 0.9, mrr: 0.0, max_drop: 0.02}
 
 全ツールが構造化された結果を返す。
 
-- `search(query, k=5, doc=None)`: 順位付きチャンク（`id`, `doc`, `page`, `text`）。説明文に検索方式が入る（bm25 なら「言い換えでなく文書の語で」）
+- `search(query, k=5, doc=None)`: 順位付きチャンク（`id`, `doc`, `page`, `text`）と、毎回 `trust`（`ok`, `stale`, `recall`, `n_golden`, `measured_at`, `reason`）を返す。エージェントが `quality` を呼ばなくても、索引が古い・測られていないことが伝わる。説明文に検索方式が入る（bm25 なら「言い換えでなく文書の語で」）
 - `quality()`: `ok`（索引が新しく、recall が合格ライン以上）、`recall`、`mrr`、`n`、`at`、`stale`、`reason`。最初に呼ぶ
 - `list_documents()`: 索引にある文書と、チャンク数・ページ数
 - `recent_queries(limit)`: 最近の質問（重複除去、ヒット数つき）。golden の候補
