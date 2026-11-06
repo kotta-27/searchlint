@@ -158,6 +158,13 @@ pub fn docs_manifest(cfg: &Config) -> Result<(String, Vec<PathBuf>)> {
     Ok((hex::encode(h.finalize())[..10].to_string(), files))
 }
 
+/// content hash of each document (relative path -> 12 hex chars), used to tell which golden rows' documents changed
+pub fn doc_hashes(cfg: &Config) -> Result<HashMap<String, String>> {
+    let mut m = HashMap::new();
+    for f in list_files(cfg)? { m.insert(rel(cfg, &f), hex::encode(Sha256::digest(&std::fs::read(&f)?))[..12].to_string()); }
+    Ok(m)
+}
+
 pub fn rel(cfg: &Config, f: &Path) -> String {
     f.strip_prefix(cfg.docs_dir()).unwrap_or(f).to_string_lossy().replace('\\', "/")
 }

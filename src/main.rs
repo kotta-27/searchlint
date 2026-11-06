@@ -56,6 +56,8 @@ enum GoldenCmd {
     /// mark every draft as ok
     Approve,
     List,
+    /// record each row's document version and answer location (after reviewing changes, re-run to accept them)
+    Pin,
 }
 
 fn main() {
@@ -105,7 +107,19 @@ fn real_main(cli: Cli) -> Result<i32> {
                 GoldenCmd::Approve => {
                     let n = rows.iter().filter(|r| r.status == "draft").count();
                     for r in &mut rows { r.status = "ok".into(); }
-                    golden::save(&path, &rows)?; println!("approved {n}");
+                    let ix = index::Index::open(&cfg)?;
+                    let hashes = ingest::doc_hashes(&cfg)?;
+                    let mut fresh: Vec<golden::Row> = rows.iter().filter(|r| r.doc_sha.is_none()).cloned().collect();
+                    golden::pin(&mut fresh, &ix.chunks, &hashes);
+                    for f in fresh { if let Some(r) = rows.iter_mut().find(|r| r.q == f.q && r.doc_sha.is_none()) { *r = f; } }
+                    golden::save(&path, &rows)?; println!("approved {n} (pinned to the current document versions)");
+                }
+                GoldenCmd::Pin => {
+                    let ix = index::Index::open(&cfg)?;
+                    let hashes = ingest::doc_hashes(&cfg)?;
+                    let (pinned, missing) = golden::pin(&mut rows, &ix.chunks, &hashes);
+                    golden::save(&path, &rows)?;
+                    println!("pinned {pinned} rows to the current documents{}", if missing > 0 { format!("; {missing} rows' expect is in no chunk (left as they were: fix their expect)") } else { String::new() });
                 }
                 GoldenCmd::Draft { n, seed } => {
                     let ix = index::Index::open(&cfg)?;

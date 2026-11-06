@@ -19,7 +19,7 @@ searchlint init --docs ./docs        # writes searchlint.yaml
 searchlint index                     # txt / md / pdf -> cleaned chunks -> FTS5 (+ FAISS unless bm25)
 searchlint golden draft 20           # LLM drafts queries into golden.yaml (status: draft)
 #   review golden.yaml: fix or delete drafts, then
-searchlint golden approve
+searchlint golden approve           # also pins each row to the current document version
 searchlint run                       # recall@k, MRR; the first passing run becomes searchlint.baseline.json
 searchlint run --ci                  # exit 1 below the gate or if recall dropped > max_drop vs the baseline
 searchlint serve --mcp               # MCP: search / quality / list_documents / recent_queries / reload
@@ -49,9 +49,24 @@ Snippets, not chunk ids: the golden set survives re-chunking, re-embedding and e
 specific (4+ characters, ideally a phrase): a short common word matches everywhere and hides regressions.
 `run` warns about short ones. Drafts are kept only when the answer really occurs in the chunk.
 
-When a document is revised and the snippet itself changes (9MB -> 10MB), the query fails. `run` tells the two
-cases apart: `[STALE GOLDEN]` means no chunk in the corpus contains the snippet any more (edit golden.yaml);
-`[retrieval: rank 12]` means the snippet exists but was not in the top k (a retrieval regression).
+## When documents change
+
+A golden row says two things: what the user wants to know (usually still valid after an edit) and where the answer is
+(which an edit may legitimately move, reword or delete). So `run` only gates rows whose document is unchanged:
+
+- `golden approve` / `golden pin` record each row's document hash and the text around its answer
+- **unchanged document**: gated as usual. This is where silent breakage shows up: a new or duplicated document
+  crowding out the right one. `run` lists rows that **ranked lower** than in the baseline and names the document now on
+  top; `gate.max_mrr_drop` can fail the build on it before recall moves
+- **changed document**: the row goes to **review**, not to failure: `still found` (just re-pin), `answer text changed`
+  with a suggested new expect (whatever now sits between the old answer's left and right context, so 9MB -> 10MB is
+  caught exactly), or `section gone` (retire or rewrite)
+- **removed document**: listed for retirement
+- **documents with no golden rows** are listed so new documents get coverage
+
+After reviewing, edit golden.yaml as suggested and run `searchlint golden pin` to accept the new versions.
+
+Misses on gated rows are still split into `[STALE GOLDEN]` (the snippet is in no chunk) and `[retrieval: rank 12]`.
 
 ## searchlint.yaml
 

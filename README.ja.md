@@ -19,7 +19,7 @@ searchlint init --docs ./docs        # searchlint.yaml を書く
 searchlint index                     # txt / md / pdf → 掃除 → チャンク → tantivy（bm25 以外は + 埋め込み）
 searchlint golden draft 20           # LLM が golden.yaml に下書き（status: draft）
 #   golden.yaml を見直す: 直す・消す。そのあと
-searchlint golden approve
+searchlint golden approve           # also pins each row to the current document version
 searchlint run                       # recall@k と MRR。最初に合格した run が searchlint.baseline.json になる
 searchlint run --ci                  # 合格ライン未満、または基準から max_drop 超で落ちたら exit 1
 searchlint serve --mcp               # MCP: search / quality / list_documents / recent_queries / reload
@@ -49,9 +49,24 @@ searchlint serve --mcp               # MCP: search / quality / list_documents / 
 文字列は具体的に（4 文字以上、できれば語句）。短い一般語はどこにでも当たり、劣化を隠す。`run` が短いものに警告する。
 下書きは「答えが本当にチャンクに含まれる」ものだけ残る。
 
-文書が改訂されて文字列そのものが変わったとき（9MB → 10MB）はクエリが外れる。`run` はその 2 つを区別する:
-`[STALE GOLDEN]` はコーパスのどのチャンクにも文字列が無い（golden.yaml を直す）、`[retrieval: rank 12]` は文字列は
-あるが上位 k に入らなかった（検索の劣化）。
+## 文書が変わったとき
+
+golden の 1 行は 2 つのことを言っている。ユーザーが知りたいこと（改訂後もたいてい有効）と、答えがどこにあるか
+（改訂で動く・言い回しが変わる・消えるのは正常）。そこで `run` は、文書が変わっていない行だけを合否に使う。
+
+- `golden approve` / `golden pin` が、各行の文書の hash と、答えの前後の文を記録する
+- **文書が変わっていない行**: これまでどおり合否に使う。静かな壊れ方はここに出る。新しい文書や重複した文書が正しい
+  文書を押し出すと、基準より**順位が下がった行**と、今 1 位にいる文書を出す。`gate.max_mrr_drop` で、recall が
+  下がる前に失敗にできる
+- **文書が変わった行**: 失敗ではなく**要確認**に回す。`still found`（pin し直すだけ）、`answer text changed`
+  （新しい expect を提案。旧答えの前後の文の間に今ある文字列を取るので、9MB → 10MB は正確に拾える）、
+  `section gone`（退役か書き直し）
+- **削除された文書の行**: 退役候補として出す
+- **正解集合の無い文書**: 一覧に出し、新しい文書の網羅を促す
+
+確認したら golden.yaml を提案どおりに直し、`searchlint golden pin` で新しい版を受け入れる。
+
+合否に使う行の外れは、引き続き `[STALE GOLDEN]`（文字列がどのチャンクにも無い）と `[retrieval: rank 12]` に分ける。
 
 ## searchlint.yaml
 

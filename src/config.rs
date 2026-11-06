@@ -47,6 +47,10 @@ pub struct Gate {
     /// optional: fail when search latency p95 exceeds this (ms). 0 = off. Latency depends on the machine: set it for a fixed CI runner.
     #[serde(default)]
     pub p95_ms: f64,
+    /// optional: fail when MRR on the rows shared with the baseline drops by more than this. 0 = off.
+    /// Catches answers that are still in the top k but sank (crowding) before recall moves.
+    #[serde(default)]
+    pub max_mrr_drop: f64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -92,7 +96,7 @@ fn d_chunk() -> Chunk { Chunk { size: 500, overlap: 60, clean: true, by: d_by() 
 fn d_embed() -> Model { Model { provider: "fastembed".into(), model: "bge-m3".into(), host: d_host(), device: d_device() } }
 fn d_llm() -> Model { Model { provider: d_ollama(), model: "qwen3:8b".into(), host: d_host(), device: d_device() } }
 fn d_search() -> Search { Search { mode: d_mode(), k: 5, pool: 30 } }
-fn d_gate() -> Gate { Gate { recall: 0.9, mrr: 0.0, max_drop: 0.02, p95_ms: 0.0 } }
+fn d_gate() -> Gate { Gate { recall: 0.9, mrr: 0.0, max_drop: 0.02, p95_ms: 0.0, max_mrr_drop: 0.0 } }
 fn d_golden() -> String { "golden.yaml".into() }
 fn d_baseline() -> String { "searchlint.baseline.json".into() }
 fn d_state() -> String { ".searchlint".into() }
@@ -118,7 +122,7 @@ chunk: {{size: 500, overlap: 60, clean: true, by: size}}   # by: heading = one c
 embed: {{provider: fastembed, model: bge-m3}}   # in-process ONNX; or provider: ollama with host\n\
 llm: {{provider: ollama, model: qwen3:8b, host: http://localhost:11434}}\n\
 search: {{mode: hybrid, k: 5, pool: 30}}\n\
-gate: {{recall: 0.9, mrr: 0.0, max_drop: 0.02, p95_ms: 0}}   # p95_ms: latency gate in ms, 0 = off\n\
+gate: {{recall: 0.9, mrr: 0.0, max_drop: 0.02, max_mrr_drop: 0, p95_ms: 0}}   # 0 = off\n\
 golden: golden.yaml\n\
 baseline: searchlint.baseline.json\n\
 state: .searchlint\n"

@@ -26,8 +26,118 @@ pub struct Row {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// content hash of `doc` when this row was last confirmed (`golden pin` / `golden approve`).
+    /// If the document changes, the row is not gated any more: it goes to review until re-pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_sha: Option<String>,
+    /// the text around the answer when pinned: used to find where the answer moved after the document changed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
 }
 fn ok() -> String { "ok".into() }
+
+/// How a row relates to the current documents.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum State { Unchanged, Unpinned, Changed, Removed }
+
+pub fn state(r: &Row, hashes: &std::collections::HashMap<String, String>) -> State {
+    match (&r.doc, &r.doc_sha) {
+        (Some(d), Some(h)) => match hashes.get(d) { None => State::Removed, Some(cur) if cur == h => State::Unchanged, Some(_) => State::Changed },
+        _ => State::Unpinned,
+    }
+}
+
+/// Record doc, doc_sha and anchor for every row whose expect is found in the corpus now. Rows whose expect is gone keep
+/// their old pin (so they stay in review). Returns (pinned, not found).
+pub fn pin(rows: &mut [Row], chunks: &[Chunk], hashes: &std::collections::HashMap<String, String>) -> (usize, usize) {
+    let (mut pinned, mut missing) = (0, 0);
+    for r in rows.iter_mut().filter(|r| r.status != "draft") {
+        match chunks.iter().find(|c| hit(c, r)) {
+            Some(c) => {
+                r.doc = Some(c.doc.clone());
+                r.doc_sha = hashes.get(&c.doc).cloned();
+                r.anchor = Some(anchor_around(&c.text, &r.expect));
+                pinned += 1;
+            }
+            None => missing += 1,
+        }
+    }
+    (pinned, missing)
+}
+
+/// the answer with ~60 chars of context on each side (whitespace removed): enough to find where it went after an edit
+fn anchor_around(text: &str, expect: &[String]) -> String {
+    let t: Vec<char> = norm(text).chars().collect();
+    let ts: String = t.iter().collect();
+    for e in expect {
+        let en = norm(e);
+        if let Some(bpos) = ts.find(&en) {
+            let start = ts[..bpos].chars().count();
+            let end = start + en.chars().count();
+            let (a, b) = (start.saturating_sub(60), (end + 60).min(t.len()));
+            return t[a..b].iter().collect();
+        }
+    }
+    t.iter().take(300).collect()
+}
+
+fn trigrams(s: &str) -> std::collections::HashSet<[char; 3]> {
+    let v: Vec<char> = norm(s).chars().collect();
+    v.windows(3).map(|w| [w[0], w[1], w[2]]).collect()
+}
+
+fn longest_common(a: &str, b: &str) -> String {
+    let (a, b): (Vec<char>, Vec<char>) = (norm(a).chars().collect(), norm(b).chars().collect());
+    let mut prev = vec![0usize; b.len() + 1];
+    let (mut best, mut end) = (0usize, 0usize);
+    for i in 1..=a.len() {
+        let mut cur = vec![0usize; b.len() + 1];
+        for j in 1..=b.len() {
+            if a[i - 1] == b[j - 1] { cur[j] = prev[j - 1] + 1; if cur[j] > best { best = cur[j]; end = i; } }
+        }
+        prev = cur;
+    }
+    a[end - best..end].iter().collect()
+}
+
+/// For a row whose document changed and whose expect no longer matches: the chunk of the same document most like the
+/// pinned anchor, and a suggested new expect. The suggestion is what now sits between the old answer's left and right
+/// context (so "9MB" -> "10MB" edits are caught exactly); failing that, the longest text shared with the anchor.
+pub fn relocate<'a>(r: &Row, chunks: &'a [Chunk]) -> Option<(&'a Chunk, Option<String>)> {
+    let anchor = r.anchor.as_deref()?;
+    let doc = r.doc.as_deref()?;
+    let at = trigrams(anchor);
+    let best = chunks.iter().filter(|c| c.doc == doc).map(|c| {
+        let ct = trigrams(&c.text);
+        let j = at.intersection(&ct).count() as f64 / (at.union(&ct).count().max(1)) as f64;
+        (j, c)
+    }).max_by(|x, y| x.0.partial_cmp(&y.0).unwrap())?;
+    if best.0 < 0.15 { return None; }
+    let t = norm(&best.1.text);
+    let a: Vec<char> = anchor.chars().collect();
+    // where the old expect sat inside the anchor
+    let old = r.expect.iter().map(|e| norm(e)).find(|e| anchor.contains(e.as_str()));
+    if let Some(old) = old {
+        let start = anchor[..anchor.find(&old).unwrap()].chars().count();
+        let end = start + old.chars().count();
+        for w in [16usize, 12, 8, 6] {
+            let left: String = a[start.saturating_sub(w)..start].iter().collect();
+            let right: String = a[end..(end + w).min(a.len())].iter().collect();
+            if left.is_empty() || right.is_empty() { continue; }
+            if let Some(li) = t.find(&left) {
+                let from = li + left.len();
+                if let Some(ri) = t[from..].find(&right) {
+                    let mid: String = t[from..from + ri].to_string();
+                    let n = mid.chars().count();
+                    if (2..=60).contains(&n) && mid != old { return Some((best.1, Some(mid))); }
+                }
+            }
+        }
+    }
+    let common = longest_common(anchor, &best.1.text);
+    let sugg = (common.chars().count() >= 8).then(|| common.chars().take(40).collect());
+    Some((best.1, sugg))
+}
 
 fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
@@ -96,7 +206,7 @@ pub fn draft(cfg: &Config, chunks: &[Chunk], n: usize, existing: &[Row], seed: u
         let a = a.trim().to_string();
         let an = norm(&a);
         if !(MIN_EXPECT..=60).contains(&an.chars().count()) || !norm(&c.text).contains(&an) || bad_answer(q, &a) { continue; }
-        out.push(Row { q: q.trim().to_string(), expect: vec![a], doc: Some(c.doc.clone()), src: Some(c.id.clone()), status: "draft".into(), note: None });
+        out.push(Row { q: q.trim().to_string(), expect: vec![a], doc: Some(c.doc.clone()), src: Some(c.id.clone()), status: "draft".into(), note: None, doc_sha: None, anchor: None });
     }
     Ok(out)
 }
