@@ -18,6 +18,9 @@ pub struct Chunk {
     pub sha: String,
 }
 
+/// bump when chunking output changes for the same input, so existing indexes are rebuilt
+pub const CHUNKER_VERSION: u32 = 2;
+
 static DOTS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[.．…・]{5,}").unwrap());
 static NUMLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*[0-9０-９]{1,3}\s*(/\s*[0-9０-９]{1,3})?\s*$|^\s*[①-⑳]\s*$").unwrap());
 static WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
@@ -118,7 +121,16 @@ pub fn split_by_heading(text: &str, size: usize, overlap: usize) -> Vec<String> 
     if !cur.trim().is_empty() { sections.push(cur); }
     let mut out = Vec::new();
     for sec in sections {
-        if sec.chars().count() > 2 * size { out.extend(split(&sec, size, overlap)); } else { out.push(sec.trim().to_string()); }
+        if sec.chars().count() <= 2 * size { out.push(sec.trim().to_string()); continue; }
+        // long section: split the body into windows and repeat the heading on every window, so each window is
+        // searchable by the section's title and a golden row can point at the section by its heading
+        let (head, body) = match sec.split_once('\n') {
+            Some((h, b)) if h.trim_start().starts_with('#') => (Some(h.trim().to_string()), b.to_string()),
+            _ => (None, sec.clone()),
+        };
+        for w in split(&body, size, overlap) {
+            out.push(match &head { Some(h) => format!("{h}\n{w}"), None => w });
+        }
     }
     out
 }

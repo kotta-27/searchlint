@@ -135,13 +135,19 @@ state: .searchlint\n"
     pub fn golden_path(&self) -> PathBuf { self.abs(&self.golden) }
     pub fn baseline_path(&self) -> PathBuf { self.abs(&self.baseline) }
     pub fn needs_embeddings(&self) -> bool { self.search.mode != "bm25" }
-    /// what the index and the baseline depend on: chunking, embedding model, search settings
-    pub fn fingerprint(&self) -> String {
+    /// what the index depends on: chunking, the chunker's own version, and the embedding model (if any).
+    /// Search settings (k, mode weights, pool) are deliberately left out: changing k must not force a re-index.
+    pub fn index_fingerprint(&self) -> String {
         let key = serde_json::json!({
+            "chunker": crate::ingest::CHUNKER_VERSION,
             "chunk": {"size": self.chunk.size, "overlap": self.chunk.overlap, "clean": self.chunk.clean, "by": self.chunk.by},
             "embed": if self.needs_embeddings() { Some(format!("{}:{}", self.embed.provider, self.embed.model)) } else { None },
-            "search": {"mode": self.search.mode, "k": self.search.k, "pool": self.search.pool},
         });
+        hex::encode(Sha256::digest(key.to_string().as_bytes()))[..10].to_string()
+    }
+    /// what a run's numbers depend on: the index plus the search settings. The baseline is only compared when this matches.
+    pub fn fingerprint(&self) -> String {
+        let key = serde_json::json!({"index": self.index_fingerprint(), "search": {"mode": self.search.mode, "k": self.search.k, "pool": self.search.pool}});
         hex::encode(Sha256::digest(key.to_string().as_bytes()))[..10].to_string()
     }
 }

@@ -1,6 +1,6 @@
 //! Index: tantivy (BM25 over lindera tokens) and, unless search.mode is bm25, a flat f32 matrix for exact
 //! inner-product search. Embeddings are cached per (model, chunk text) under the state dir.
-//! index.json records the config fingerprint and the documents manifest so `run` can tell when the index is stale.
+//! index.json records the index fingerprint (chunking + chunker version + embedding model) and the documents manifest so `run` can tell when the index is stale.
 use crate::config::Config;
 use crate::ingest::{docs_manifest, Chunk};
 use crate::embed::Embedder;
@@ -71,7 +71,7 @@ impl Index {
     /// None when fresh, else a reason
     pub fn staleness(&self) -> Result<Option<String>> {
         if self.cfg.needs_embeddings() && self.dense.is_none() { return Ok(Some("index was built without embeddings (bm25)".into())); }
-        if self.meta.fingerprint != self.cfg.fingerprint() { return Ok(Some("config changed since the index was built".into())); }
+        if self.meta.fingerprint != self.cfg.index_fingerprint() { return Ok(Some("chunking or embedding config (or searchlint version) changed since the index was built".into())); }
         if self.meta.docs != docs_manifest(&self.cfg)?.0 { return Ok(Some("documents changed since the index was built".into())); }
         Ok(None)
     }
@@ -117,7 +117,7 @@ impl Index {
         let (docs_hash, files) = docs_manifest(cfg)?;
         let meta = Meta {
             built: chrono::Local::now().format("%Y-%m-%dT%H:%M").to_string(), chunks: chunks.len(), files: files.len(), embedded_new,
-            model: cfg.needs_embeddings().then(|| cfg.embed.model.clone()), fingerprint: cfg.fingerprint(), docs: docs_hash, dims,
+            model: cfg.needs_embeddings().then(|| cfg.embed.model.clone()), fingerprint: cfg.index_fingerprint(), docs: docs_hash, dims,
         };
         fs::write(&meta_p, serde_json::to_string_pretty(&meta)?)?;
         let embedder = if cfg.needs_embeddings() { Some(Embedder::new(cfg)?) } else { None };
