@@ -76,7 +76,7 @@ fn quality(cfg: &Config, index: &Index) -> Result<Value> {
     let recall = s["recall"].as_f64().unwrap_or(0.0);
     if recall < cfg.gate.recall { reasons.push(format!("recall {recall:.3} below gate {}", cfg.gate.recall)); }
     Ok(json!({"ok": reasons.is_empty(), "measured": true, "stale": stale.is_some(), "at": r["at"], "k": r["k"], "mode": r["mode"], "n": s["n"],
-              "recall": (recall * 1000.0).round() / 1000.0, "mrr": (s["mrr"].as_f64().unwrap_or(0.0) * 1000.0).round() / 1000.0,
+              "recall": (recall * 1000.0).round() / 1000.0, "p50_ms": s["p50_ms"], "p95_ms": s["p95_ms"], "mrr": (s["mrr"].as_f64().unwrap_or(0.0) * 1000.0).round() / 1000.0,
               "gate_recall": cfg.gate.recall, "reason": if reasons.is_empty() { Value::Null } else { json!(reasons.join("; ")) }}))
 }
 

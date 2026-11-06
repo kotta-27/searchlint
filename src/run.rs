@@ -15,7 +15,11 @@ pub struct Per {
     #[serde(default, skip_serializing_if = "Option::is_none")] pub why: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Summary { pub n: usize, pub recall: f64, pub mrr: f64 }
+pub struct Summary {
+    pub n: usize, pub recall: f64, pub mrr: f64,
+    /// search latency per query (ms), measured after one warm-up query; the same search path the MCP server uses
+    #[serde(default)] pub p50_ms: f64, #[serde(default)] pub p95_ms: f64, #[serde(default)] pub max_ms: f64,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
     pub at: String, pub k: usize, pub mode: String, pub fingerprint: String, pub index_built: String,
@@ -25,8 +29,12 @@ pub struct RunResult {
 
 pub fn evaluate(index: &Index, rows: &[Row], k: usize) -> Result<(Summary, Vec<Per>)> {
     let mut per = Vec::new();
+    let mut lat: Vec<f64> = Vec::new();
+    if let Some(r) = rows.first() { index.search(&r.q, Some(k), None)?; } // warm-up (first inference allocates)
     for r in rows {
+        let t0 = std::time::Instant::now();
         let chunks = index.search(&r.q, Some(k), None)?;
+        lat.push(t0.elapsed().as_secs_f64() * 1000.0);
         let rank = chunks.iter().position(|c| golden::hit(c, r));
         let why = if rank.is_some() { None } else if !index.chunks.iter().any(|c| golden::hit(c, r)) {
             Some("stale".into())
@@ -41,7 +49,11 @@ pub fn evaluate(index: &Index, rows: &[Row], k: usize) -> Result<(Summary, Vec<P
         });
     }
     let n = per.len().max(1) as f64;
-    Ok((Summary { n: per.len(), recall: per.iter().filter(|p| p.hit).count() as f64 / n, mrr: per.iter().map(|p| p.mrr).sum::<f64>() / n }, per))
+    lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pct = |q: f64| if lat.is_empty() { 0.0 } else { lat[((lat.len() as f64 * q).ceil() as usize).saturating_sub(1).min(lat.len() - 1)] };
+    let round = |x: f64| (x * 10.0).round() / 10.0;
+    Ok((Summary { n: per.len(), recall: per.iter().filter(|p| p.hit).count() as f64 / n, mrr: per.iter().map(|p| p.mrr).sum::<f64>() / n,
+                  p50_ms: round(pct(0.5)), p95_ms: round(pct(0.95)), max_ms: round(lat.last().copied().unwrap_or(0.0)) }, per))
 }
 
 pub struct Opts { pub ci: bool, pub update_baseline: bool }
@@ -69,6 +81,11 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
     };
     out(line("recall", summary.recall, comparable.then(|| base.as_ref().unwrap().summary.recall)));
     out(line("mrr", summary.mrr, comparable.then(|| base.as_ref().unwrap().summary.mrr)));
+    {
+        let mut l = format!("  latency    p50 {:.0} ms  p95 {:.0} ms  max {:.0} ms", summary.p50_ms, summary.p95_ms, summary.max_ms);
+        if let Some(b) = base.as_ref().filter(|b| comparable && b.summary.p95_ms > 0.0) { l += &format!("   (baseline p95 {:.0} ms)", b.summary.p95_ms); }
+        out(l);
+    }
     for w in golden::warnings(rows).into_iter().take(5) { notes.push(format!("warning: {w}")); }
     let misses: Vec<&Per> = per.iter().filter(|p| !p.hit).collect();
     if !misses.is_empty() {
@@ -97,6 +114,7 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
     }
     if summary.recall < gate.recall { problems.push(format!("recall {:.3} < gate.recall {}", summary.recall, gate.recall)); }
     if summary.mrr < gate.mrr { problems.push(format!("mrr {:.3} < gate.mrr {}", summary.mrr, gate.mrr)); }
+    if gate.p95_ms > 0.0 && summary.p95_ms > gate.p95_ms { problems.push(format!("latency p95 {:.0} ms > gate.p95_ms {}", summary.p95_ms, gate.p95_ms)); }
     if summary.n < 20 { notes.push(format!("only {} golden queries: one miss = {:.2} recall. The gate gets meaningful around 40+.", summary.n, 1.0 / summary.n.max(1) as f64)); }
     for n in &notes { out(format!("  {n}")); }
     let ok = problems.is_empty();

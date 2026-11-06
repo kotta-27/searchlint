@@ -25,6 +25,8 @@ pub struct Meta {
     pub fingerprint: String,
     pub docs: String,
     pub dims: usize,
+    #[serde(default)]
+    pub build_sec: f64,
 }
 
 pub struct Index {
@@ -77,6 +79,7 @@ impl Index {
     }
 
     pub fn build(cfg: &Config, chunks: Vec<Chunk>, progress: &dyn Fn(usize, usize)) -> Result<Index> {
+        let t_build = std::time::Instant::now();
         let (chunks_p, tant_p, dense_p, cache_p, meta_p) = paths(cfg);
         fs::create_dir_all(cfg.state_dir())?;
         fs::write(&chunks_p, serde_json::to_string(&chunks)?)?;
@@ -118,6 +121,7 @@ impl Index {
         let meta = Meta {
             built: chrono::Local::now().format("%Y-%m-%dT%H:%M").to_string(), chunks: chunks.len(), files: files.len(), embedded_new,
             model: cfg.needs_embeddings().then(|| cfg.embed.model.clone()), fingerprint: cfg.index_fingerprint(), docs: docs_hash, dims,
+            build_sec: (t_build.elapsed().as_secs_f64() * 10.0).round() / 10.0,
         };
         fs::write(&meta_p, serde_json::to_string_pretty(&meta)?)?;
         let embedder = if cfg.needs_embeddings() { Some(Embedder::new(cfg)?) } else { None };

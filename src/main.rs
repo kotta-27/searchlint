@@ -78,7 +78,7 @@ fn do_index(cfg: &Config) -> Result<i32> {
     if chunks.is_empty() { anyhow::bail!("no chunks: no files matched {:?} under {}", cfg.include, cfg.docs_dir().display()); }
     println!("{} files -> {} chunks", files.len(), chunks.len());
     let ix = index::Index::build(cfg, chunks, &progress)?;
-    match &ix.meta.model { Some(m) => println!("indexed. embedded {} new chunks with {m}", ix.meta.embedded_new), None => println!("indexed. bm25 only, no embeddings") }
+    match &ix.meta.model { Some(m) => println!("indexed in {:.1} s. embedded {} new chunks with {m}", ix.meta.build_sec, ix.meta.embedded_new), None => println!("indexed in {:.1} s. bm25 only, no embeddings", ix.meta.build_sec) }
     Ok(0)
 }
 
@@ -122,16 +122,20 @@ fn real_main(cli: Cli) -> Result<i32> {
         Cmd::Run { ci, baseline, index: reindex, json } => {
             let rows: Vec<golden::Row> = golden::load(&cfg.golden_path())?.into_iter().filter(|r| r.status != "draft").collect();
             if rows.is_empty() { anyhow::bail!("no approved golden queries. searchlint golden draft 20 -> review -> searchlint golden approve"); }
+            let t_open = std::time::Instant::now();
             let mut ix = index::Index::open(&cfg)?;
+            let mut startup_ms = t_open.elapsed().as_secs_f64() * 1000.0;
             if let Some(reason) = ix.staleness()? {
-                if reindex { println!("index stale ({reason}): rebuilding"); do_index(&cfg)?; ix = index::Index::open(&cfg)?; }
+                if reindex { println!("index stale ({reason}): rebuilding"); do_index(&cfg)?; let t = std::time::Instant::now(); ix = index::Index::open(&cfg)?; startup_ms = t.elapsed().as_secs_f64() * 1000.0; }
                 else { anyhow::bail!("index is stale: {reason}. Run `searchlint index` (or `searchlint run --index`)"); }
             }
             let mut lines: Vec<String> = Vec::new();
             let (ok, result) = run::run(&cfg, &ix, &rows, &run::Opts { ci, update_baseline: baseline }, &mut |s| if json { lines.push(s) } else { println!("{s}") })?;
+            if !json { println!("  startup    {:.0} ms (index open{})", startup_ms, if cfg.needs_embeddings() { " + embedding model load" } else { "" }); }
             if json {
                 let missed: Vec<&str> = result.per.iter().filter(|p| !p.hit).map(|p| p.q.as_str()).collect();
                 let mut v = serde_json::to_value(&result)?; v.as_object_mut().unwrap().remove("per"); v["missed"] = serde_json::json!(missed);
+                v["startup_ms"] = serde_json::json!((startup_ms * 10.0).round() / 10.0); v["index_build_sec"] = serde_json::json!(ix.meta.build_sec);
                 println!("{}", serde_json::to_string_pretty(&v)?);
             }
             Ok(if ok || !ci { 0 } else { 1 })

@@ -110,3 +110,7 @@ Every tool returns structured content.
 
 - recall@k: a golden query hits if any of the top k chunks contains an expected snippet
 - MRR: 1 / rank of the first hit, averaged
+- latency p50 / p95 / max: time per search over the golden queries (after one warm-up), the same path MCP uses.
+  Mostly the query embedding (BGE-M3 on CPU, longer questions cost more); bm25 alone is ~1-3 ms.
+  `gate.p95_ms` fails the run above a threshold (off by default: latency depends on the machine)
+- startup: index open + embedding model load (paid once per MCP server). index build time is recorded in index.json
