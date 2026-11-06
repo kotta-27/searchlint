@@ -1,6 +1,6 @@
 """Documents -> cleaned chunks. txt / md / pdf (per page, with page numbers).
 Cleaning removes running headers/footers, page numbers, isolated step callouts and TOC dot leaders."""
-import os, re, glob
+import os, re, glob, hashlib
 from .llm import sha
 
 DOTS = re.compile(r"[.．…・]{5,}")
@@ -43,16 +43,25 @@ def list_files(docs_dir, patterns):
         files.update(glob.glob(os.path.join(docs_dir, pat), recursive=True))
     return sorted(f for f in files if os.path.isfile(f))
 
-def build_chunks(cfg):
-    """-> list of {id, doc, page, text}. id = doc#n (n restarts per doc); stable while the doc text is unchanged."""
+def docs_manifest(cfg):
+    """hash of (relative path, size, mtime) for every included file: tells `run` whether the index is stale"""
     files = list_files(cfg.docs, cfg["include"])
-    size, overlap, clean = cfg["chunk"]["size"], cfg["chunk"]["overlap"], cfg["chunk"].get("clean", True)
-    chunks, seen = [], set()
+    h = hashlib.sha256()
+    for f in files:
+        st = os.stat(f); h.update(f"{os.path.relpath(f, cfg.docs)}|{st.st_size}|{int(st.st_mtime)}\n".encode())
+    return h.hexdigest()[:10], files
+
+def build_chunks(cfg):
+    """-> (files, chunks). chunk = {id, doc, page, text, sha}; id = doc#n. Duplicates are dropped within a document only,
+    so a boilerplate paragraph shared by two documents stays searchable in both."""
+    _, files = docs_manifest(cfg)
+    size, overlap, clean = int(cfg["chunk"]["size"]), int(cfg["chunk"]["overlap"]), cfg["chunk"].get("clean", True)
+    chunks = []
     for f in files:
         rel = os.path.relpath(f, cfg.docs)
         pages = extract(f)
         if clean: pages = clean_pages(pages)
-        n = 0
+        n, seen = 0, set()
         for page, body in pages:
             for t in split(body, size, overlap):
                 key = re.sub(r"\s+", "", t)

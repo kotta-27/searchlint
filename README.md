@@ -2,33 +2,51 @@
 
 Lint for retrieval. Golden queries live in your repo; `searchlint run --ci` fails the build when
 recall drops after a document edit, a chunking change or an embedding-model swap. The same index is
-served to agents over MCP, together with its last measured quality.
+served to agents over MCP, together with its measured quality.
 
 Local only: embeddings and golden drafting go through Ollama. Nothing leaves the machine.
+`search.mode: bm25` needs no embeddings and no Ollama at all (CI on a plain runner).
 
 ```
 pip install searchlint        # (or: pip install -e . from this repo)
-ollama pull bge-m3 qwen3:8b
+ollama pull bge-m3 && ollama pull qwen3:8b
 
 searchlint init --docs ./docs        # writes searchlint.yaml
-searchlint index                     # txt / md / pdf -> cleaned chunks -> FTS5 + FAISS
+searchlint index                     # txt / md / pdf -> cleaned chunks -> FTS5 (+ FAISS unless bm25)
 searchlint golden draft 20           # LLM drafts queries into golden.yaml (status: draft)
-#   review golden.yaml, fix or delete drafts, then
+#   review golden.yaml: fix or delete drafts, then
 searchlint golden approve
-searchlint run                       # recall@k, MRR, nDCG; first run becomes the baseline
-searchlint run --ci                  # exit 1 if below the gate or if recall dropped > max_drop
-searchlint serve --mcp               # MCP: search / quality / recent_queries
+searchlint run                       # recall@k, MRR; the first passing run becomes searchlint.baseline.json
+searchlint run --ci                  # exit 1 below the gate or if recall dropped > max_drop vs the baseline
+searchlint serve --mcp               # MCP: search / quality / list_documents / recent_queries / reload
 ```
+
+Exit codes: `0` ok, `1` gate failed, `2` cannot evaluate (stale index, bad config or golden, Ollama down).
+
+## Files
+
+| file | commit? | what |
+|---|---|---|
+| `searchlint.yaml` | yes | chunking, embedding, search mode, gate |
+| `golden.yaml` | yes | the queries that must be found |
+| `searchlint.baseline.json` | yes | the reference run; `max_drop` compares against it. Update with `searchlint run --baseline` and review the diff in the PR |
+| `.searchlint/` | no | index, embedding cache (per model + chunk text), last run, MCP query log |
 
 ## golden.yaml
 
 ```yaml
 - q: 添付ファイルの最大サイズは何MBですか？
-  expect: ["9MB"]            # a hit = a retrieved chunk that contains any of these snippets
-  doc: manual.pdf             # optional: restrict to one document
+  expect: ["添付ファイルの最大サイズ"]   # a hit = a retrieved chunk that contains any of these snippets
+  doc: manual.pdf                       # optional: restrict to one document
+  status: ok                            # draft rows are ignored by run
 ```
 
-Snippets, not chunk ids: the golden set survives re-chunking, re-embedding and edits.
+Snippets, not chunk ids: the golden set survives re-chunking, re-embedding and edits. Keep snippets
+specific (4+ characters, ideally a phrase): a short common word matches everywhere and hides regressions.
+`run` warns about short ones. Drafts are kept only when the answer really occurs in the chunk.
+
+When a document is revised and the snippet itself changes (9MB -> 10MB), the query fails and `missed`
+shows the top-1 chunk: that is a golden update, not a retrieval regression. Edit the snippet.
 
 ## searchlint.yaml
 
@@ -36,21 +54,32 @@ Snippets, not chunk ids: the golden set survives re-chunking, re-embedding and e
 docs: ./docs
 include: ["**/*.md", "**/*.txt", "**/*.pdf"]
 chunk: {size: 500, overlap: 60, clean: true}   # clean: drop running headers, page numbers, TOC lines
-embed: {provider: ollama, model: bge-m3}
+embed: {provider: ollama, model: bge-m3}        # unused when search.mode is bm25
 llm:   {provider: ollama, model: qwen3:8b}      # only for golden drafting
 search: {mode: hybrid, k: 5, pool: 30}          # bm25 | dense | hybrid (RRF)
 gate:  {recall: 0.9, mrr: 0.0, max_drop: 0.02}
 ```
 
+`run` refuses a stale index (config or documents changed since `index`): rerun `searchlint index`, or
+`searchlint run --index` to rebuild on the fly. A baseline made with a different config is not compared
+against (the drop check is skipped with a note); reset it with `--baseline`.
+
+## How many golden queries
+
+With 8 queries one miss is 0.125 recall: every gate fires. The gate gets meaningful around 40 and
+comfortable at 100. Grow it from `recent_queries` (what agents actually ask) and from `golden draft`.
+
 ## CI
 
 ```yaml
-# .github/workflows/searchlint.yml (self-hosted runner with Ollama)
+# .github/workflows/searchlint.yml
 - run: pip install searchlint && searchlint index && searchlint run --ci
 ```
 
-State (`.searchlint/`) holds the index, an embedding cache keyed by chunk text, the baseline and the
-last run. Commit `golden.yaml` and `searchlint.yaml`; ignore `.searchlint/`.
+Hybrid or dense mode needs Ollama on the runner (self-hosted). Keep `.searchlint/embed-cache.npz` in
+the runner cache: re-indexing then embeds only new or changed chunks. bm25 mode runs anywhere.
+
+`searchlint run --json` prints the summary, problems, notes and missed queries as JSON.
 
 ## MCP
 
@@ -58,11 +87,15 @@ last run. Commit `golden.yaml` and `searchlint.yaml`; ignore `.searchlint/`.
 { "mcpServers": { "searchlint": { "command": "searchlint", "args": ["serve", "--mcp"], "cwd": "/path/to/repo" } } }
 ```
 
-`quality` returns the last run (recall@k, MRR, n, when) so an agent knows how far to trust `search`.
-`recent_queries` lists what agents asked: candidates for new golden queries.
+Every tool returns structured content.
+
+- `search(query, k=5, doc=None)`: ranked chunks with `id`, `doc`, `page`, `text`. The description tells the agent the mode (bm25: use the documents' words, not paraphrases).
+- `quality()`: `ok` (fresh index and recall above the gate), `recall`, `mrr`, `n`, `at`, `stale`, `reason`. Call it first.
+- `list_documents()`: what is indexed, with chunk and page counts.
+- `recent_queries(limit)`: distinct recent queries with hit counts: golden candidates.
+- `reload()`: pick up a new index without restarting.
 
 ## Metrics
 
 - recall@k: a golden query hits if any of the top k chunks contains an expected snippet
-- MRR: 1 / rank of the first hit
-- nDCG: rank-weighted hits, binary relevance
+- MRR: 1 / rank of the first hit, averaged
