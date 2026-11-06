@@ -49,8 +49,9 @@ Snippets, not chunk ids: the golden set survives re-chunking, re-embedding and e
 specific (4+ characters, ideally a phrase): a short common word matches everywhere and hides regressions.
 `run` warns about short ones. Drafts are kept only when the answer really occurs in the chunk.
 
-When a document is revised and the snippet itself changes (9MB -> 10MB), the query fails and `missed`
-shows the top-1 chunk: that is a golden update, not a retrieval regression. Edit the snippet.
+When a document is revised and the snippet itself changes (9MB -> 10MB), the query fails. `run` tells the two
+cases apart: `[STALE GOLDEN]` means no chunk in the corpus contains the snippet any more (edit golden.yaml);
+`[retrieval: rank 12]` means the snippet exists but was not in the top k (a retrieval regression).
 
 ## searchlint.yaml
 

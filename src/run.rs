@@ -9,7 +9,11 @@ use std::fs;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Top { pub id: String, pub doc: String, pub page: Option<u32>, pub text: String }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Per { pub q: String, pub hit: bool, pub rank: Option<usize>, pub mrr: f64, pub top: Vec<Top> }
+pub struct Per {
+    pub q: String, pub hit: bool, pub rank: Option<usize>, pub mrr: f64, pub top: Vec<Top>,
+    /// for misses: "stale" (no chunk in the corpus contains the expected snippet: update golden) or "rank N" / "beyond pool" (retrieval)
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub why: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Summary { pub n: usize, pub recall: f64, pub mrr: f64 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,9 +28,16 @@ pub fn evaluate(index: &Index, rows: &[Row], k: usize) -> Result<(Summary, Vec<P
     for r in rows {
         let chunks = index.search(&r.q, Some(k), None)?;
         let rank = chunks.iter().position(|c| golden::hit(c, r));
+        let why = if rank.is_some() { None } else if !index.chunks.iter().any(|c| golden::hit(c, r)) {
+            Some("stale".into())
+        } else {
+            let pool = index.cfg.search.pool.max(k);
+            match index.search(&r.q, Some(pool), None)?.iter().position(|c| golden::hit(c, r)) { Some(i) => Some(format!("rank {}", i + 1)), None => Some(format!("beyond pool {pool}")) }
+        };
         per.push(Per {
             q: r.q.clone(), hit: rank.is_some(), rank: rank.map(|i| i + 1), mrr: rank.map(|i| 1.0 / (i as f64 + 1.0)).unwrap_or(0.0),
             top: chunks.iter().take(3).map(|c| Top { id: c.id.clone(), doc: c.doc.clone(), page: c.page, text: c.text.chars().take(120).collect() }).collect(),
+            why,
         });
     }
     let n = per.len().max(1) as f64;
@@ -61,10 +72,12 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
     for w in golden::warnings(rows).into_iter().take(5) { notes.push(format!("warning: {w}")); }
     let misses: Vec<&Per> = per.iter().filter(|p| !p.hit).collect();
     if !misses.is_empty() {
-        out(format!("  missed {}:", misses.len()));
+        let stale = misses.iter().filter(|p| p.why.as_deref() == Some("stale")).count();
+        out(format!("  missed {}{}:", misses.len(), if stale > 0 { format!(" ({stale} stale golden: the expected snippet is in no chunk any more; update golden.yaml)") } else { String::new() }));
         for p in misses.iter().take(10) {
             let t = p.top.first().map(|t| format!("{}{}", t.doc, t.page.map(|pg| format!(" p.{pg}")).unwrap_or_default())).unwrap_or("-".into());
-            out(format!("    - {}   top1: {t}", p.q.chars().take(60).collect::<String>()));
+            let why = match p.why.as_deref() { Some("stale") => "STALE GOLDEN".to_string(), Some(w) => format!("retrieval: {w}"), None => String::new() };
+            out(format!("    - {}   [{why}]  top1: {t}", p.q.chars().take(60).collect::<String>()));
         }
     }
     if let Some(b) = &base {

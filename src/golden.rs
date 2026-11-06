@@ -72,7 +72,14 @@ pub fn hit(chunk: &Chunk, row: &Row) -> bool {
 const DRAFT: &str = "次の資料だけから答えられる質問を1つ作ってください。資料固有の事実（固有名詞・数値・手順など）を問う短い質問にします。\n\
 answer は資料中にそのまま出てくる語句（4〜30文字）にしてください。\n# 資料\n{text}\nJSON のみ: {\"question\": \"質問文\", \"answer\": \"資料中の語句\"}";
 
-/// LLM drafts n queries; each is kept only if its answer snippet really occurs in the chunk.
+/// answers that are headings, page / section references, or just the question's own words make useless golden rows
+fn bad_answer(q: &str, a: &str) -> bool {
+    let an = norm(a);
+    let re = regex::Regex::new(r"^[0-9０-９]+([-\.．－][0-9０-９]+)*\s*|ページ|^第[0-9０-９一二三四五六七八九十]+[章節条]|[～〜]").unwrap();
+    re.is_match(a.trim()) || norm(q).contains(&an) || a.trim().ends_with("する") && a.chars().count() <= 8
+}
+
+/// LLM drafts n queries; each is kept only if its answer snippet really occurs in the chunk and is not a heading / reference.
 pub fn draft(cfg: &Config, chunks: &[Chunk], n: usize, existing: &[Row], seed: u64) -> Result<Vec<Row>> {
     let ollama = Ollama::new(&cfg.llm.host);
     let done: std::collections::HashSet<&str> = existing.iter().filter_map(|r| r.src.as_deref()).collect();
@@ -88,7 +95,7 @@ pub fn draft(cfg: &Config, chunks: &[Chunk], n: usize, existing: &[Row], seed: u
         let (Some(q), Some(a)) = (j["question"].as_str(), j["answer"].as_str()) else { continue };
         let a = a.trim().to_string();
         let an = norm(&a);
-        if !(MIN_EXPECT..=60).contains(&an.chars().count()) || !norm(&c.text).contains(&an) { continue; }
+        if !(MIN_EXPECT..=60).contains(&an.chars().count()) || !norm(&c.text).contains(&an) || bad_answer(q, &a) { continue; }
         out.push(Row { q: q.trim().to_string(), expect: vec![a], doc: Some(c.doc.clone()), src: Some(c.id.clone()), status: "draft".into(), note: None });
     }
     Ok(out)
