@@ -16,7 +16,7 @@ dependencies = [
   "httpx",
   "pypdf",
   "pyyaml",
-  "mcp",
+  "mcp>=2",
 ]
 
 [project.scripts]
