@@ -1,0 +1,33 @@
+[package]
+name = "searchlint"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+description = "Lint for retrieval: golden queries, recall/MRR, a CI gate, and an MCP server over the same index."
+repository = "https://github.com/kotta-27/searchlint"
+
+[[bin]]
+name = "searchlint"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+anyhow = "1"
+regex = "1"
+sha2 = "0.10"
+hex = "0.4"
+glob = "0.3"
+walkdir = "2"
+tantivy = "0.24"
+lindera = { version = "6", default-features = false, features = ["embed-ipadic"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+pdf-extract = "0.9"
+chrono = "0.4"
+bytemuck = "1"
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -4,12 +4,13 @@ Lint for retrieval. Golden queries live in your repo; `searchlint run --ci` fail
 recall drops after a document edit, a chunking change or an embedding-model swap. The same index is
 served to agents over MCP, together with its measured quality.
 
-Local only: embeddings and golden drafting go through Ollama. Nothing leaves the machine.
+Single Rust binary. Japanese segmentation (lindera, IPADIC embedded) and BM25 (tantivy) run in-process; only the
+embeddings and golden drafting go through Ollama. Nothing leaves the machine.
 `search.mode: bm25` needs no embeddings and no Ollama at all (CI on a plain runner).
 
 ```
-pip install searchlint        # (or: pip install -e . from this repo)
-ollama pull bge-m3 && ollama pull qwen3:8b
+cargo install --git https://github.com/kotta-27/searchlint   # or: cargo build --release
+ollama pull bge-m3 && ollama pull qwen3:8b                     # hybrid / dense mode and golden drafting
 
 searchlint init --docs ./docs        # writes searchlint.yaml
 searchlint index                     # txt / md / pdf -> cleaned chunks -> FTS5 (+ FAISS unless bm25)
@@ -94,6 +95,10 @@ Every tool returns structured content.
 - `list_documents()`: what is indexed, with chunk and page counts.
 - `recent_queries(limit)`: distinct recent queries with hit counts: golden candidates.
 - `reload()`: pick up a new index without restarting.
+
+## Layout
+
+`src/` is the Rust implementation (the one that ships). `py/` is the original Python prototype, kept for reference.
 
 ## Metrics
 
