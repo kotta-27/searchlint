@@ -58,7 +58,8 @@ A golden row says two things: what the user wants to know (usually still valid a
 - **unchanged document**: gated as usual. This is where silent breakage shows up: a new or duplicated document
   crowding out the right one. `run` lists rows that **ranked lower** than in the baseline and names the document now on
   top; `gate.max_mrr_drop` can fail the build on it before recall moves
-- **changed document**: the row goes to **review**, not to failure: `still found` (just re-pin), `answer text changed`
+- **changed document**: rows whose answer context (the answer and ~60 chars around it, within its section) is still
+  verbatim in the new text stay gated. Only rows whose own context changed go to **review**, not to failure: `still found` (just re-pin), `answer text changed`
   with a suggested new expect (whatever now sits between the old answer's left and right context, so 9MB -> 10MB is
   caught exactly), or `section gone` (retire or rewrite)
 - **removed document**: listed for retirement

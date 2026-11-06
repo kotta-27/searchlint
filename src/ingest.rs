@@ -165,6 +165,14 @@ pub fn doc_hashes(cfg: &Config) -> Result<HashMap<String, String>> {
     Ok(m)
 }
 
+/// one document's text as the index sees it (extracted, cleaned), whitespace removed. Used to check whether a golden
+/// row's answer context survived an edit of its document.
+pub fn doc_text(cfg: &Config, doc: &str) -> Result<String> {
+    let mut pages = extract(&cfg.docs_dir().join(doc))?;
+    if cfg.chunk.clean { pages = clean_pages(pages); }
+    Ok(norm(&pages.into_iter().map(|(_, t)| t).collect::<Vec<_>>().join("\n")))
+}
+
 pub fn rel(cfg: &Config, f: &Path) -> String {
     f.strip_prefix(cfg.docs_dir()).unwrap_or(f).to_string_lossy().replace('\\', "/")
 }

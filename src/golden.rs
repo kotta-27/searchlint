@@ -74,18 +74,23 @@ fn anchor_around(text: &str, expect: &[String]) -> String {
         if let Some(bpos) = ts.find(&en) {
             let start = ts[..bpos].chars().count();
             let end = start + en.chars().count();
-            let (a, b) = (start.saturating_sub(60), (end + 60).min(t.len()));
+            let (mut a, mut b) = (start.saturating_sub(60), (end + 60).min(t.len()));
+            // keep the anchor inside the answer's own section: an edit to the neighbouring section must not move this row to review
+            if let Some(h) = (a..start).rev().find(|&i| t[i] == '#') { a = h + 1; while a < start && t[a] == '#' { a += 1; } }
+            if let Some(h) = (end..b).find(|&i| t[i] == '#') { b = h; }
             return t[a..b].iter().collect();
         }
     }
     t.iter().take(300).collect()
 }
 
+#[allow(dead_code)]
 fn trigrams(s: &str) -> std::collections::HashSet<[char; 3]> {
     let v: Vec<char> = norm(s).chars().collect();
     v.windows(3).map(|w| [w[0], w[1], w[2]]).collect()
 }
 
+#[allow(dead_code)]
 fn longest_common(a: &str, b: &str) -> String {
     let (a, b): (Vec<char>, Vec<char>) = (norm(a).chars().collect(), norm(b).chars().collect());
     let mut prev = vec![0usize; b.len() + 1];
@@ -100,43 +105,43 @@ fn longest_common(a: &str, b: &str) -> String {
     a[end - best..end].iter().collect()
 }
 
-/// For a row whose document changed and whose expect no longer matches: the chunk of the same document most like the
-/// pinned anchor, and a suggested new expect. The suggestion is what now sits between the old answer's left and right
-/// context (so "9MB" -> "10MB" edits are caught exactly); failing that, the longest text shared with the anchor.
-pub fn relocate<'a>(r: &Row, chunks: &'a [Chunk]) -> Option<(&'a Chunk, Option<String>)> {
-    let anchor = r.anchor.as_deref()?;
-    let doc = r.doc.as_deref()?;
-    let at = trigrams(anchor);
-    let best = chunks.iter().filter(|c| c.doc == doc).map(|c| {
-        let ct = trigrams(&c.text);
-        let j = at.intersection(&ct).count() as f64 / (at.union(&ct).count().max(1)) as f64;
-        (j, c)
-    }).max_by(|x, y| x.0.partial_cmp(&y.0).unwrap())?;
-    if best.0 < 0.15 { return None; }
-    let t = norm(&best.1.text);
+pub enum Moved<'a> {
+    /// what now sits between the old answer's left and right context
+    Suggest(&'a Chunk, String),
+    /// the surrounding text is partly there but the answer cannot be pinned down: rewrite by hand from this chunk
+    Near(&'a Chunk),
+    /// neither side of the old context survives in the document: the section was removed or rewritten
+    Gone,
+}
+
+/// For a row whose answer context changed: where it went, judged from the text around the old answer.
+pub fn relocate<'a>(r: &Row, chunks: &'a [Chunk]) -> Moved<'a> {
+    let (Some(anchor), Some(doc)) = (r.anchor.as_deref(), r.doc.as_deref()) else { return Moved::Gone };
+    let doc_chunks: Vec<&Chunk> = chunks.iter().filter(|c| c.doc == doc).collect();
     let a: Vec<char> = anchor.chars().collect();
-    // where the old expect sat inside the anchor
-    let old = r.expect.iter().map(|e| norm(e)).find(|e| anchor.contains(e.as_str()));
-    if let Some(old) = old {
-        let start = anchor[..anchor.find(&old).unwrap()].chars().count();
-        let end = start + old.chars().count();
-        for w in [16usize, 12, 8, 6] {
-            let left: String = a[start.saturating_sub(w)..start].iter().collect();
-            let right: String = a[end..(end + w).min(a.len())].iter().collect();
-            if left.is_empty() || right.is_empty() { continue; }
-            if let Some(li) = t.find(&left) {
+    let Some(old) = r.expect.iter().map(|e| norm(e)).find(|e| anchor.contains(e.as_str())) else { return Moved::Gone };
+    let start = anchor[..anchor.find(&old).unwrap()].chars().count();
+    let end = start + old.chars().count();
+    let mut side_seen = None;
+    for w in [16usize, 12, 8, 6] {
+        let left: String = a[start.saturating_sub(w)..start].iter().collect();
+        let right: String = a[end..(end + w).min(a.len())].iter().collect();
+        for c in &doc_chunks {
+            let t = norm(&c.text);
+            let li = if left.is_empty() { None } else { t.find(&left) };
+            let ri = if right.is_empty() { None } else { t.find(&right) };
+            if li.is_some() || ri.is_some() { side_seen.get_or_insert(*c); }
+            if let Some(li) = li {
                 let from = li + left.len();
-                if let Some(ri) = t[from..].find(&right) {
-                    let mid: String = t[from..from + ri].to_string();
+                if let Some(rj) = (!right.is_empty()).then(|| t[from..].find(&right)).flatten() {
+                    let mid = t[from..from + rj].to_string();
                     let n = mid.chars().count();
-                    if (2..=60).contains(&n) && mid != old { return Some((best.1, Some(mid))); }
+                    if (2..=60).contains(&n) && mid != old { return Moved::Suggest(c, mid); }
                 }
             }
         }
     }
-    let common = longest_common(anchor, &best.1.text);
-    let sugg = (common.chars().count() >= 8).then(|| common.chars().take(40).collect());
-    Some((best.1, sugg))
+    match side_seen { Some(c) => Moved::Near(c), None => Moved::Gone }
 }
 
 fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<String>, D::Error> {

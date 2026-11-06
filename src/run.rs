@@ -64,16 +64,27 @@ pub fn evaluate(index: &Index, rows: &[Row], k: usize) -> Result<(Summary, Vec<P
 
 pub struct Opts { pub ci: bool, pub update_baseline: bool }
 
+/// first line of a question, cut to n chars, for one-line listings
+fn short(q: &str, n: usize) -> String { q.lines().next().unwrap_or("").chars().take(n).collect() }
+
 pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn FnMut(String)) -> Result<(bool, RunResult)> {
     let k = cfg.search.k;
     // Only rows whose document is unchanged since they were pinned (or that were never pinned) are gated.
     // A changed document legitimately moves or rewrites answers: those rows go to review instead of failing the build.
     let hashes = crate::ingest::doc_hashes(cfg)?;
+    // A changed document only moves the rows whose own answer context changed: a row whose anchor (the answer with
+    // ~60 chars around it) is still verbatim in the new text stays gated.
     let (mut gated, mut changed, mut removed) = (Vec::new(), Vec::new(), Vec::new());
+    let mut texts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut kept = 0usize;
     for r in rows {
         match golden::state(r, &hashes) {
             golden::State::Unchanged | golden::State::Unpinned => gated.push(r.clone()),
-            golden::State::Changed => changed.push(r.clone()),
+            golden::State::Changed => {
+                let (d, a) = (r.doc.clone().unwrap_or_default(), r.anchor.clone().unwrap_or_default());
+                if !texts.contains_key(&d) { texts.insert(d.clone(), crate::ingest::doc_text(cfg, &d).unwrap_or_default()); }
+                if !a.is_empty() && texts[&d].contains(&a) { kept += 1; gated.push(r.clone()); } else { changed.push(r.clone()); }
+            }
             golden::State::Removed => removed.push(r.clone()),
         }
     }
@@ -86,9 +97,9 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
             serde_json::json!({"q": r.q, "doc": r.doc, "status": "still found", "action": "re-pin (searchlint golden pin)", "rank": p.rank})
         } else if p.why.as_deref() == Some("stale") {
             match golden::relocate(r, &index.chunks) {
-                Some((c, Some(sugg))) => serde_json::json!({"q": r.q, "doc": r.doc, "status": "answer text changed", "action": "update expect", "suggest": sugg, "near": c.id, "page": c.page}),
-                Some((c, None)) => serde_json::json!({"q": r.q, "doc": r.doc, "status": "answer text changed", "action": "rewrite expect from the nearest chunk", "near": c.id, "page": c.page}),
-                None => serde_json::json!({"q": r.q, "doc": r.doc, "status": "section gone", "action": "retire or rewrite"}),
+                golden::Moved::Suggest(c, sugg) => serde_json::json!({"q": r.q, "doc": r.doc, "status": "answer text changed", "action": "update expect", "suggest": sugg, "near": c.id, "page": c.page}),
+                golden::Moved::Near(c) => serde_json::json!({"q": r.q, "doc": r.doc, "status": "answer text changed", "action": "rewrite expect by hand from the nearest chunk", "near": c.id, "page": c.page}),
+                golden::Moved::Gone => serde_json::json!({"q": r.q, "doc": r.doc, "status": "section gone", "action": "retire or rewrite"}),
             }
         } else {
             serde_json::json!({"q": r.q, "doc": r.doc, "status": "answer still present but not retrieved", "action": "retrieval regression in a changed document", "why": p.why})
@@ -133,7 +144,7 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
         for p in misses.iter().take(10) {
             let t = p.top.first().map(|t| format!("{}{}", t.doc, t.page.map(|pg| format!(" p.{pg}")).unwrap_or_default())).unwrap_or("-".into());
             let why = match p.why.as_deref() { Some("stale") => "STALE GOLDEN".to_string(), Some(w) => format!("retrieval: {w}"), None => String::new() };
-            out(format!("    - {}   [{why}]  top1: {t}", p.q.chars().take(60).collect::<String>()));
+            out(format!("    - {}   [{why}]  top1: {t}", short(&p.q, 60)));
         }
     }
     if let Some(b) = &base {
@@ -156,7 +167,7 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
                 out(format!("  ranked lower than baseline {}:", sank.len()));
                 for (p, a, b) in sank.iter().take(8) {
                     let t = p.top.first().map(|t| t.doc.clone()).unwrap_or_default();
-                    out(format!("    - {}   rank {a} -> {b}   top1 now: {t}", p.q.chars().take(50).collect::<String>()));
+                    out(format!("    - {}   rank {a} -> {b}   top1 now: {t}", short(&p.q, 50)));
                 }
                 let mut by_doc: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
                 for (p, _, _) in &sank { if let Some(t) = p.top.first() { *by_doc.entry(t.doc.as_str()).or_default() += 1; } }
@@ -166,7 +177,7 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
             }
             let fixed = per.iter().filter(|p| p.hit && was.get(p.q.as_str()).map(|w| !w.hit).unwrap_or(false)).count();
             if fixed > 0 || !broken.is_empty() {
-                out(format!("  vs baseline: {fixed} fixed, {} broken{}", broken.len(), if broken.is_empty() { String::new() } else { format!(": {}", broken.iter().take(5).map(|p| p.q.chars().take(40).collect::<String>()).collect::<Vec<_>>().join("; ")) }));
+                out(format!("  vs baseline: {fixed} fixed, {} broken{}", broken.len(), if broken.is_empty() { String::new() } else { format!(": {}", broken.iter().take(5).map(|p| short(&p.q, 40)).collect::<Vec<_>>().join("; ")) }));
             }
             let now_mrr = both.iter().map(|p| p.mrr).sum::<f64>() / both.len().max(1) as f64;
             let base_mrr = both.iter().map(|p| was[p.q.as_str()].mrr).sum::<f64>() / both.len().max(1) as f64;
@@ -178,14 +189,15 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
             }
         }
     }
+    if kept > 0 { notes.push(format!("{kept} rows' documents changed but their answer context did not: still gated (`searchlint golden pin` refreshes their version)")); }
     if !review.is_empty() {
-        out(format!("  review {} (document changed since pinned; not gated):", review.len()));
+        out(format!("  review {} (answer context changed since pinned; not gated):", review.len()));
         for v in review.iter().take(10) {
             let extra = v.get("suggest").and_then(|x| x.as_str()).map(|x| format!("  suggest expect: {x:?}")).unwrap_or_default();
-            out(format!("    - {}   [{}]{}", v["q"].as_str().unwrap_or("").chars().take(50).collect::<String>(), v["status"].as_str().unwrap_or(""), extra));
+            out(format!("    - {}   [{}]{}", short(v["q"].as_str().unwrap_or(""), 50), v["status"].as_str().unwrap_or(""), extra));
         }
     }
-    if !removed.is_empty() { out(format!("  removed {} (their document is gone; retire or move them): {}", removed.len(), removed.iter().take(3).map(|r| r.q.chars().take(30).collect::<String>()).collect::<Vec<_>>().join("; "))); }
+    if !removed.is_empty() { out(format!("  removed {} (their document is gone; retire or move them): {}", removed.len(), removed.iter().take(3).map(|r| short(&r.q, 30)).collect::<Vec<_>>().join("; "))); }
     if !uncovered.is_empty() { notes.push(format!("{} document(s) have no golden rows: {}{}. `searchlint golden draft` can start them.", uncovered.len(), uncovered.iter().take(3).cloned().collect::<Vec<_>>().join(", "), if uncovered.len() > 3 { ", ..." } else { "" })); }
     if unpinned > 0 { notes.push(format!("{unpinned} golden rows are not pinned to a document version: run `searchlint golden pin` so document edits move them to review instead of failing.")); }
     if summary.recall < gate.recall { problems.push(format!("recall {:.3} < gate.recall {}", summary.recall, gate.recall)); }
