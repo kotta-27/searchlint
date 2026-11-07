@@ -20,6 +20,7 @@ searchlint index                     # txt / md / pdf -> cleaned chunks -> FTS5 
 searchlint golden draft 20           # LLM drafts queries into golden.yaml (status: draft)
 #   review golden.yaml: fix or delete drafts, then
 searchlint golden approve           # also pins each row to the current document version
+searchlint golden check              # grade the golden set itself before trusting a recall number
 searchlint run                       # recall@k, MRR; the first passing run becomes searchlint.baseline.json
 searchlint run --ci                  # exit 1 below the gate or if recall dropped > max_drop vs the baseline
 searchlint serve --mcp               # MCP: search / quality / list_documents / recent_queries / reload
@@ -80,12 +81,28 @@ embed: {provider: fastembed, model: bge-m3, device: cpu}   # in-process ONNX, mo
 #      provider: ollama (+ host) uses a running Ollama instead
 llm:   {provider: ollama, model: qwen3:8b}      # only for golden drafting
 search: {mode: hybrid, k: 5, pool: 30}          # bm25 | dense | hybrid (RRF)
-gate:  {recall: 0.9, mrr: 0.0, max_drop: 0.02}
+gate:  {max_drop: 0.02, max_broken: -1, recall: 0, mrr: 0, max_mrr_drop: 0, p95_ms: 0}
+#      the gate compares against the baseline: fail when recall drops more than max_drop, or when more than
+#      max_broken rows that used to hit now miss (if set, it replaces max_drop: easier to reason about with few rows).
+#      recall / mrr / max_mrr_drop / p95_ms are optional absolute limits (0 = off)
 ```
 
 `run` refuses a stale index (config or documents changed since `index`): rerun `searchlint index`, or
 `searchlint run --index` to rebuild on the fly. A baseline made with a different config is not compared
 against (the drop check is skipped with a note); reset it with `--baseline`.
+
+## Grading the golden set
+
+A recall number is only as good as the rows behind it. `searchlint golden check` reports:
+
+- stale rows (the expect is in no chunk) and expects shorter than 4 characters
+- expects that match more than 3 sections: a hit may be the wrong place (a bare "第六十二条" matches every reference)
+- vague questions: "one of the images", "in this document", "an example of", a bare word
+- coverage (documents with no rows) and size
+- wording overlap: how much the questions reuse the answer chunk's words. High overlap flatters keyword search
+
+`golden draft` drops the same kinds of rows before you see them; `golden draft --uncovered` drafts only from documents
+that have no rows yet. `golden check` exits 1 on errors (`--strict`: on warnings too).
 
 ## How many golden queries
 

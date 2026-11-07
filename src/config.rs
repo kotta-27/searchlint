@@ -51,7 +51,12 @@ pub struct Gate {
     /// Catches answers that are still in the top k but sank (crowding) before recall moves.
     #[serde(default)]
     pub max_mrr_drop: f64,
+    /// optional: fail when more than this many golden rows that hit in the baseline now miss. -1 = off.
+    /// When set, it replaces the max_drop ratio: with few rows one miss is a big ratio, a count is easier to reason about.
+    #[serde(default = "d_off")]
+    pub max_broken: i64,
 }
+fn d_off() -> i64 { -1 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "d_docs")]
@@ -88,7 +93,7 @@ fn d_device() -> String { "cpu".into() }
 fn d_mode() -> String { "hybrid".into() }
 fn d_k() -> usize { 5 }
 fn d_pool() -> usize { 30 }
-fn d_recall() -> f64 { 0.9 }
+fn d_recall() -> f64 { 0.0 }
 fn d_drop() -> f64 { 0.02 }
 fn d_docs() -> String { "./docs".into() }
 fn d_include() -> Vec<String> { vec!["**/*.md".into(), "**/*.txt".into(), "**/*.pdf".into()] }
@@ -96,7 +101,7 @@ fn d_chunk() -> Chunk { Chunk { size: 500, overlap: 60, clean: true, by: d_by() 
 fn d_embed() -> Model { Model { provider: "fastembed".into(), model: "bge-m3".into(), host: d_host(), device: d_device() } }
 fn d_llm() -> Model { Model { provider: d_ollama(), model: "qwen3:8b".into(), host: d_host(), device: d_device() } }
 fn d_search() -> Search { Search { mode: d_mode(), k: 5, pool: 30 } }
-fn d_gate() -> Gate { Gate { recall: 0.9, mrr: 0.0, max_drop: 0.02, p95_ms: 0.0, max_mrr_drop: 0.0 } }
+fn d_gate() -> Gate { Gate { recall: 0.0, mrr: 0.0, max_drop: 0.02, p95_ms: 0.0, max_mrr_drop: 0.0, max_broken: -1 } }
 fn d_golden() -> String { "golden.yaml".into() }
 fn d_baseline() -> String { "searchlint.baseline.json".into() }
 fn d_state() -> String { ".searchlint".into() }
@@ -122,7 +127,9 @@ chunk: {{size: 500, overlap: 60, clean: true, by: size}}   # by: heading = one c
 embed: {{provider: fastembed, model: bge-m3}}   # in-process ONNX; or provider: ollama with host\n\
 llm: {{provider: ollama, model: qwen3:8b, host: http://localhost:11434}}\n\
 search: {{mode: hybrid, k: 5, pool: 30}}\n\
-gate: {{recall: 0.9, mrr: 0.0, max_drop: 0.02, max_mrr_drop: 0, p95_ms: 0}}   # 0 = off\n\
+# the gate compares against searchlint.baseline.json: fail when recall drops more than max_drop (or more than
+# max_broken rows break, if set). recall / mrr / p95_ms / max_mrr_drop are optional absolute limits (0 = off).
+gate: {{max_drop: 0.02, max_broken: -1, recall: 0, mrr: 0, max_mrr_drop: 0, p95_ms: 0}}\n\
 golden: golden.yaml\n\
 baseline: searchlint.baseline.json\n\
 state: .searchlint\n"

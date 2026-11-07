@@ -174,6 +174,35 @@ pub fn save(path: &Path, rows: &[Row]) -> Result<()> {
     Ok(())
 }
 
+/// questions that do not single out one answer: "one of the images", "in this document", a bare word...
+pub fn vague_question(q: &str) -> Option<&'static str> {
+    let t = q.trim();
+    let pats: [(&str, &str); 8] = [
+        (r"(の|を)?(一つ|ひとつ|１つ|1つ)(を|は|の|示|挙)", "asks for 'one of' several answers"),
+        (r"いずれか|どれか|何か(一つ)?(を|教)", "accepts any of several answers"),
+        (r"(この|本|当)(資料|文書|ドキュメント|ファイル)|資料中|文中に", "refers to 'this document' instead of naming the topic"),
+        (r"^(質問|質問文|答え|回答)[?？]?$", "is not a question"),
+        (r"^.{0,5}$", "is too short to be a real question"),
+        (r"(関数|メソッド|クラス)で(計算|使われ|定義)される.{0,6}(は|を)[?？]?$", "does not say which function"),
+        (r"(キー|語句|項目)として使われている", "asks for any key / word used"),
+        (r"(例|一例)を(挙げ|示)", "asks for an example"),
+    ];
+    for (p, why) in pats { if regex::Regex::new(p).unwrap().is_match(t) { return Some(why); } }
+    None
+}
+
+/// section identity of a chunk: its leading heading line if it has one (all windows of a long section repeat it), else its id
+fn section_key(c: &Chunk) -> String {
+    match c.text.trim_start().lines().next() { Some(l) if l.trim_start().starts_with('#') => format!("{}|{}", c.doc, l.trim()), _ => c.id.clone() }
+}
+
+/// how many distinct sections the row's expect matches: more than a few means a hit may be the wrong place
+pub fn spread(r: &Row, chunks: &[Chunk]) -> usize {
+    chunks.iter().filter(|c| hit(c, r)).map(section_key).collect::<std::collections::HashSet<_>>().len()
+}
+
+pub const MAX_SPREAD: usize = 3;
+
 pub fn warnings(rows: &[Row]) -> Vec<String> {
     rows.iter().flat_map(|r| r.expect.iter().filter(|x| norm(x).chars().count() < MIN_EXPECT).map(move |x| format!("expect too short ({x:?}) in: {}", r.q.chars().take(40).collect::<String>()))).collect()
 }
@@ -196,9 +225,14 @@ fn bad_answer(q: &str, a: &str) -> bool {
 
 /// LLM drafts n queries; each is kept only if its answer snippet really occurs in the chunk and is not a heading / reference.
 pub fn draft(cfg: &Config, chunks: &[Chunk], n: usize, existing: &[Row], seed: u64) -> Result<Vec<Row>> {
+    draft_from(cfg, chunks, chunks, n, existing, seed)
+}
+
+/// draft from `sources` (e.g. only uncovered documents) while checking answers for uniqueness against the whole corpus
+pub fn draft_from(cfg: &Config, sources: &[Chunk], chunks: &[Chunk], n: usize, existing: &[Row], seed: u64) -> Result<Vec<Row>> {
     let ollama = Ollama::new(&cfg.llm.host);
     let done: std::collections::HashSet<&str> = existing.iter().filter_map(|r| r.src.as_deref()).collect();
-    let mut cands: Vec<&Chunk> = chunks.iter().filter(|c| !done.contains(c.id.as_str()) && c.text.chars().count() > 120).collect();
+    let mut cands: Vec<&Chunk> = sources.iter().filter(|c| !done.contains(c.id.as_str()) && c.text.chars().count() > 120).collect();
     // deterministic shuffle (xorshift) so --seed reproduces the draft
     let mut s = seed.max(1);
     for i in (1..cands.len()).rev() { s ^= s << 13; s ^= s >> 7; s ^= s << 17; cands.swap(i, (s % (i as u64 + 1)) as usize); }
@@ -211,7 +245,9 @@ pub fn draft(cfg: &Config, chunks: &[Chunk], n: usize, existing: &[Row], seed: u
         let a = a.trim().to_string();
         let an = norm(&a);
         if !(MIN_EXPECT..=60).contains(&an.chars().count()) || !norm(&c.text).contains(&an) || bad_answer(q, &a) { continue; }
-        out.push(Row { q: q.trim().to_string(), expect: vec![a], doc: Some(c.doc.clone()), src: Some(c.id.clone()), status: "draft".into(), note: None, doc_sha: None, anchor: None });
+        let row = Row { q: q.trim().to_string(), expect: vec![a], doc: Some(c.doc.clone()), src: Some(c.id.clone()), status: "draft".into(), note: None, doc_sha: None, anchor: None };
+        if vague_question(&row.q).is_some() || spread(&row, chunks) > MAX_SPREAD { continue; }
+        out.push(row);
     }
     Ok(out)
 }

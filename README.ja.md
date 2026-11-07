@@ -19,7 +19,8 @@ searchlint init --docs ./docs        # searchlint.yaml を書く
 searchlint index                     # txt / md / pdf → 掃除 → チャンク → tantivy（bm25 以外は + 埋め込み）
 searchlint golden draft 20           # LLM が golden.yaml に下書き（status: draft）
 #   golden.yaml を見直す: 直す・消す。そのあと
-searchlint golden approve           # also pins each row to the current document version
+searchlint golden approve           # 承認と同時に、各行を今の文書の版に pin する
+searchlint golden check              # recall を信じる前に、正解集合そのものを採点する
 searchlint run                       # recall@k と MRR。最初に合格した run が searchlint.baseline.json になる
 searchlint run --ci                  # 合格ライン未満、または基準から max_drop 超で落ちたら exit 1
 searchlint serve --mcp               # MCP: search / quality / list_documents / recent_queries / reload
@@ -80,11 +81,27 @@ embed: {provider: fastembed, model: bge-m3, device: cpu}   # プロセス内 ONN
 #      provider: ollama（+ host）なら起動中の Ollama を使う
 llm:   {provider: ollama, model: qwen3:8b}      # golden draft 専用
 search: {mode: hybrid, k: 5, pool: 30}          # bm25 | dense | hybrid（RRF）
-gate:  {recall: 0.9, mrr: 0.0, max_drop: 0.02}
+gate:  {max_drop: 0.02, max_broken: -1, recall: 0, mrr: 0, max_mrr_drop: 0, p95_ms: 0}
+#      合否は基準との比較で決める: recall が max_drop を超えて下がったら失敗。max_broken を設定すると、
+#      基準で当たっていた行のうち外れた行の数で判定する（max_drop の代わり。問数が少ないときに分かりやすい）。
+#      recall / mrr / max_mrr_drop / p95_ms は任意の絶対値の制限（0 = 無効）
 ```
 
 `run` は古い索引（`index` 以後に設定か文書が変わった）を拒否する。`searchlint index` をやり直すか、
 `searchlint run --index` でその場で再構築。基準が別の設定で作られていれば比較せず注記だけ出す（`--baseline` でリセット）。
+
+## 正解集合を採点する
+
+recall の数字は、裏にある行の質までしか信用できない。`searchlint golden check` は次を出す。
+
+- stale な行（expect がどのチャンクにも無い）と、4 文字未満の expect
+- 4 つ以上の節に当たる expect。別の場所で当たっても正解扱いになる（「第六十二条」だけだと、参照している条すべてに当たる）
+- 曖昧な質問。「画像の一つ」「この資料で」「例を挙げよ」、単語だけの質問など
+- 網羅（正解集合の無い文書）と問数
+- 語の重なり。質問が答えのチャンクの言葉をどれだけ流用しているか。高いとキーワード検索に有利で、recall が甘く出る
+
+`golden draft` は同じ種類の行を、見せる前に落とす。`golden draft --uncovered` は、正解集合の無い文書からだけ下書きする。
+`golden check` はエラーがあれば exit 1（`--strict` なら警告でも）。
 
 ## 正解クエリはいくつ要るか
 

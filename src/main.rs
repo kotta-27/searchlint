@@ -1,5 +1,6 @@
 //! searchlint: lint for retrieval.
 //! exit codes: 0 ok, 1 gate failed, 2 cannot evaluate (stale index, bad config, Ollama down)
+mod check;
 mod config;
 mod embed;
 mod golden;
@@ -52,7 +53,12 @@ enum Cmd {
 #[derive(Subcommand)]
 enum GoldenCmd {
     /// LLM drafts N golden queries (status: draft) -> review golden.yaml
-    Draft { #[arg(default_value_t = 20)] n: usize, #[arg(long)] seed: Option<u64> },
+    Draft { #[arg(default_value_t = 20)] n: usize, #[arg(long)] seed: Option<u64>,
+        /// only draft from documents that have no golden rows yet
+        #[arg(long)] uncovered: bool },
+    /// grade the golden set itself: stale or over-generic expects, vague questions, coverage, wording overlap
+    Check { /// exit 1 on warnings too (default: only errors)
+        #[arg(long)] strict: bool },
     /// mark every draft as ok
     Approve,
     List,
@@ -121,10 +127,18 @@ fn real_main(cli: Cli) -> Result<i32> {
                     golden::save(&path, &rows)?;
                     println!("pinned {pinned} rows to the current documents{}", if missing > 0 { format!("; {missing} rows' expect is in no chunk (left as they were: fix their expect)") } else { String::new() });
                 }
-                GoldenCmd::Draft { n, seed } => {
+                GoldenCmd::Check { strict } => {
+                    let ix = index::Index::open(&cfg)?;
+                    let rep = check::check(&cfg, &ix, &rows, &mut |s| println!("{s}"))?;
+                    return Ok(if rep.errors > 0 || (strict && rep.warnings > 0) { 1 } else { 0 });
+                }
+                GoldenCmd::Draft { n, seed, uncovered } => {
                     let ix = index::Index::open(&cfg)?;
                     let seed = seed.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(1));
-                    let new = golden::draft(&cfg, &ix.chunks, n, &rows, seed)?;
+                    let covered: std::collections::HashSet<String> = rows.iter().filter_map(|r| r.doc.clone()).collect();
+                    let sources: Vec<ingest::Chunk> = if uncovered { ix.chunks.iter().filter(|c| !covered.contains(&c.doc)).cloned().collect() } else { ix.chunks.clone() };
+                    if sources.is_empty() { println!("every document already has golden rows"); return Ok(0); }
+                    let new = golden::draft_from(&cfg, &sources, &ix.chunks, n, &rows, seed)?;
                     let added = new.len();
                     rows.extend(new);
                     golden::save(&path, &rows)?;

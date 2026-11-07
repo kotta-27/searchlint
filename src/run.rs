@@ -184,7 +184,12 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
             if gate.max_mrr_drop > 0.0 && now_mrr < base_mrr - gate.max_mrr_drop {
                 problems.push(format!("mrr dropped {:.3} on {} rows shared with the baseline (> max_mrr_drop {})", base_mrr - now_mrr, both.len(), gate.max_mrr_drop));
             }
-            if now_rate < base_rate - gate.max_drop {
+            let broken_shared = both.iter().filter(|p| !p.hit && was[p.q.as_str()].hit).count();
+            if gate.max_broken >= 0 {
+                if broken_shared as i64 > gate.max_broken {
+                    problems.push(format!("{broken_shared} golden rows broke since the baseline (> max_broken {})", gate.max_broken));
+                }
+            } else if now_rate < base_rate - gate.max_drop {
                 problems.push(format!("recall dropped {:.3} on {} rows shared with the baseline (> max_drop {})", base_rate - now_rate, both.len(), gate.max_drop));
             }
         }
@@ -200,6 +205,7 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
     if !removed.is_empty() { out(format!("  removed {} (their document is gone; retire or move them): {}", removed.len(), removed.iter().take(3).map(|r| short(&r.q, 30)).collect::<Vec<_>>().join("; "))); }
     if !uncovered.is_empty() { notes.push(format!("{} document(s) have no golden rows: {}{}. `searchlint golden draft` can start them.", uncovered.len(), uncovered.iter().take(3).cloned().collect::<Vec<_>>().join(", "), if uncovered.len() > 3 { ", ..." } else { "" })); }
     if unpinned > 0 { notes.push(format!("{unpinned} golden rows are not pinned to a document version: run `searchlint golden pin` so document edits move them to review instead of failing.")); }
+    if base.is_none() { notes.push("no baseline yet: this run only checks absolute limits; it becomes the baseline if it passes".into()); }
     if summary.recall < gate.recall { problems.push(format!("recall {:.3} < gate.recall {}", summary.recall, gate.recall)); }
     if summary.mrr < gate.mrr { problems.push(format!("mrr {:.3} < gate.mrr {}", summary.mrr, gate.mrr)); }
     if gate.p95_ms > 0.0 && summary.p95_ms > gate.p95_ms { problems.push(format!("latency p95 {:.0} ms > gate.p95_ms {}", summary.p95_ms, gate.p95_ms)); }
@@ -214,6 +220,7 @@ pub fn run(cfg: &Config, index: &Index, rows: &[Row], o: &Opts, out: &mut dyn Fn
     if o.update_baseline || (base.is_none() && ok) {
         fs::write(cfg.baseline_path(), serde_json::to_string_pretty(&result)?)?;
         out(format!("  baseline saved -> {}{}", cfg.baseline, if o.update_baseline { "" } else { " (first passing run; commit it)" }));
+        if gate.recall == 0.0 && summary.n > 0 { out(format!("  tip: to also hold an absolute floor, set gate.recall: {:.2}", (summary.recall - 0.05).max(0.0))); }
     }
     Ok((ok, result))
 }
